@@ -226,7 +226,7 @@ async def upload_file_to_ec2(local_file_path: Path, ec2_base_url: str, device_id
         import aiohttp
         
         async with aiohttp.ClientSession() as session:
-            # EC2サーバーのアップロードエンドポイント（新しいエンドポイント）
+            # EC2サーバーのアップロードエンドポイント（正しいエンドポイント）
             upload_url = f"{ec2_base_url}/upload-prompt"
             
             # ファイルデータの準備
