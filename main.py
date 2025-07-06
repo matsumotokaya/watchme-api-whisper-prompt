@@ -2,6 +2,7 @@
 """
 Mood Chart Prompt Generator API
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
+Supabase対応版: vibe_whisperテーブルから読み込み、vibe_whisper_promptテーブルに保存
 """
 
 import os
@@ -14,15 +15,36 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# .envファイルの読み込み
+load_dotenv()
+
+from supabase_client import SupabaseClient
 
 print(f"🔧 EC2_BASE_URL = {os.getenv('EC2_BASE_URL')}")
 
 # FastAPIアプリケーションの初期化
 app = FastAPI(
     title="Mood Chart Prompt Generator API",
-    description="1日分のトランスクリプションファイルを統合し、ChatGPT分析用プロンプトを生成",
-    version="1.0.0"
+    description="1日分のトランスクリプションファイルを統合し、ChatGPT分析用プロンプトを生成 (Supabase対応版)",
+    version="2.0.0"
 )
+
+# Supabaseクライアントの遅延初期化
+supabase_client = None
+
+def get_supabase_client():
+    """Supabaseクライアントを遅延初期化して取得"""
+    global supabase_client
+    if supabase_client is None:
+        try:
+            supabase_client = SupabaseClient()
+            print("✅ Supabase client initialized successfully")
+        except Exception as e:
+            print(f"❌ Failed to initialize Supabase client: {e}")
+            raise e
+    return supabase_client
 
 class PromptResponse(BaseModel):
     status: str
@@ -475,6 +497,87 @@ async def generate_mood_prompt_ec2(
                 status="success",
                 output_path=f"/data/data_accounts/{device_id}/{date}/prompt/emotion-timeline_gpt_prompt.json"
             )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"内部サーバーエラー: {str(e)}")
+
+@app.get("/generate-mood-prompt-supabase", response_model=PromptResponse)
+async def generate_mood_prompt_supabase(
+    device_id: str = Query(..., description="デバイスID"),
+    date: str = Query(..., description="日付（YYYY-MM-DD形式）")
+):
+    """
+    Supabase版エンドポイント：vibe_whisperテーブルからデータを取得し、
+    プロンプトを生成してvibe_whisper_promptテーブルに保存
+    
+    処理フロー:
+    1. vibe_whisperテーブルから指定device_id、dateのデータを取得
+    2. 取得したデータからプロンプトを生成
+    3. vibe_whisper_promptテーブルに保存（UPSERT）
+    """
+    print(f"🌟 Supabaseエンドポイントが呼ばれました: device_id={device_id}, date={date}")
+    
+    try:
+        # 日付形式の検証
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="無効な日付形式です。YYYY-MM-DD形式で入力してください。")
+        
+        # Supabaseクライアントの取得
+        client = get_supabase_client()
+        
+        # vibe_whisperテーブルからデータを取得
+        whisper_data = await client.get_vibe_whisper_data(device_id, date)
+        
+        # データからテキストを抽出して時系列順に整理
+        texts = []
+        processed_files = []
+        missing_files = []
+        
+        # 48個の時間スロットを確認
+        time_block_data = {item['time_block']: item for item in whisper_data}
+        
+        for hour in range(24):
+            for minute in [0, 30]:
+                time_block = f"{hour:02d}-{minute:02d}"
+                
+                if time_block in time_block_data:
+                    item = time_block_data[time_block]
+                    # transcriptionフィールドからテキストを抽出
+                    text = client.extract_text_from_transcription(item.get('transcription'))
+                    
+                    if text:
+                        texts.append(f"[{hour:02d}:{minute:02d}] {text}")
+                        processed_files.append(f"{time_block}.json")
+                    else:
+                        missing_files.append(f"{time_block}.json (テキストなし)")
+                else:
+                    missing_files.append(f"{time_block}.json")
+        
+        print(f"📊 vibe_whisperデータ処理完了: processed={len(processed_files)}, missing={len(missing_files)}")
+        
+        # ChatGPT用プロンプトの生成
+        prompt = generate_chatgpt_prompt(device_id, date, texts)
+        
+        # vibe_whisper_promptテーブルに保存
+        save_success = await client.save_to_vibe_whisper_prompt(
+            device_id=device_id,
+            target_date=date,
+            prompt=prompt,
+            processed_files=len(processed_files),
+            missing_files=missing_files
+        )
+        
+        if save_success:
+            return PromptResponse(
+                status="success",
+                output_path=f"vibe_whisper_prompt table: device_id={device_id}, date={date}"
+            )
+        else:
+            raise HTTPException(status_code=500, detail="vibe_whisper_promptテーブルへの保存に失敗しました")
         
     except HTTPException:
         raise

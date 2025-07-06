@@ -2,8 +2,11 @@
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
-## ✅ 最新アップデート (2025-07-05)
+## ✅ 最新アップデート (2025-07-06)
 
+**🆕 Supabase統合完了**: `vibe_whisper`テーブルから読み込み、`vibe_whisper_prompt`テーブルに保存
+**✅ 本番テスト完了**: 2025-07-06データで正常動作確認済み（処理ファイル数: 2個、欠損: 46個）
+**✅ カラム名修正**: `time_slot` → `time_block` への対応完了
 **✅ デバイスID移行完了**: `user_id` → `device_id` アーキテクチャへの完全移行
 **✅ Vault連携確認済み**: `emotion-timeline_gpt_prompt.json` のVaultサーバーへの正常アップロード
 **✅ 本番稼働準備完了**: EC2連携でのプロダクション環境対応
@@ -20,6 +23,17 @@
 - ✅ `main.py`: 正式版（EC2連携対応、デバイスID移行済み）
 
 ## 🚀 クイックスタート
+
+### 環境設定
+
+```bash
+# .envファイルを作成
+cp .env.example .env
+
+# .envファイルを編集してSupabase認証情報を設定
+# SUPABASE_URL=https://your-project.supabase.co
+# SUPABASE_KEY=your-anon-key
+```
 
 ### インストール
 
@@ -49,7 +63,10 @@ uvicorn main:app --host 0.0.0.0 --port 8009 --reload
 ### 基本的な使用方法
 
 ```bash
-# EC2連携でプロンプト生成（推奨）- デバイスID使用
+# 🆕 Supabase統合版（推奨）- vibe_whisperテーブルから読み込み、vibe_whisper_promptテーブルに保存
+curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-06"
+
+# EC2連携でプロンプト生成 - デバイスID使用
 curl -X GET "http://localhost:8009/generate-mood-prompt-ec2?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-05"
 
 # ローカル処理 - デバイスID使用
@@ -72,29 +89,39 @@ curl -X GET "http://localhost:8009/health"
 
 ### ✅ 完了済みエンドポイント
 
-| エンドポイント | 機能 | 状態 | 出力ファイル | デバイスID対応 |
+| エンドポイント | 機能 | 状態 | 出力先 | デバイスID対応 |
 |---------------|------|------|-------------|-------------|
 | `GET /health` | ヘルスチェック | ✅ **完了** | - | N/A |
-| `GET /generate-mood-prompt` | ローカルプロンプト生成 | ✅ **完了** | emotion-timeline_gpt_prompt.json | ✅ |
-| `GET /generate-mood-prompt-ec2` | EC2プロンプト生成・Vaultアップロード | ✅ **完了** | emotion-timeline_gpt_prompt.json | ✅ |
+| `GET /generate-mood-prompt` | ローカルプロンプト生成 | ✅ **完了** | ローカルファイル | ✅ |
+| `GET /generate-mood-prompt-ec2` | EC2プロンプト生成・Vaultアップロード | ✅ **完了** | EC2/Vault | ✅ |
+| `GET /generate-mood-prompt-supabase` | Supabase統合版 | ✅ **完了** | vibe_whisper_promptテーブル | ✅ |
 
 ### ✅ 実装完了機能
 
-1. **✅ デバイスID移行**: 全エンドポイントで`user_id` → `device_id`移行完了
-2. **✅ プロンプト生成**: 48時間分のトランスクリプション統合処理
-3. **✅ Vault統合**: `emotion-timeline_gpt_prompt.json`のVaultサーバーアップロード
-4. **✅ EC2連携**: 本番環境での動作確認済み
+1. **🆕 Supabase統合**: `vibe_whisper`テーブルからデータ読み込み、`vibe_whisper_prompt`テーブルへ保存
+2. **✅ デバイスID移行**: 全エンドポイントで`user_id` → `device_id`移行完了
+3. **✅ プロンプト生成**: 48時間分のトランスクリプション統合処理
+4. **✅ Vault統合**: `emotion-timeline_gpt_prompt.json`のVaultサーバーアップロード
+5. **✅ EC2連携**: 本番環境での動作確認済み
 
 ### 🔄 WatchMeエコシステムでの位置づけ
 
 ```
+[Supabase統合版]
+iOS App → Whisper API → vibe_whisper → [このAPI] → vibe_whisper_prompt → ChatGPT API
+                                             ↑
+                                    プロンプト生成・DB保存
+
+[既存版]
 iOS App → Vault API → Whisper API → [このAPI] → ChatGPT API → 最終結果
                                          ↑
                               emotion-timeline_gpt_prompt.json
                                     Vault保存完了
 ```
 
-**このAPIの役割**: Whisperトランスクリプション → ChatGPT分析用プロンプト生成・Vault保存
+**このAPIの役割**: 
+- Supabase版: vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
+- 既存版: Whisperトランスクリプション → ChatGPT分析用プロンプト生成・Vault保存
 
 ### EC2連携機能
 
@@ -134,12 +161,34 @@ iOS App → Vault API → Whisper API → [このAPI] → ChatGPT API → 最終
 
 | 変数名 | 値 | 説明 |
 |--------|-----|------|
+| `SUPABASE_URL` | `https://your-project.supabase.co` | SupabaseプロジェクトURL |
+| `SUPABASE_KEY` | `your-anon-key` | Supabase Anonymous Key |
 | `EC2_BASE_URL` | `"https://api.hey-watch.me"` | 本番EC2サーバー（Vault連携） |
 | `EC2_BASE_URL` | `"local"` | ローカル開発モード |
 
 ## 🧪 テスト実績
 
-### 2025年7月5日テスト結果
+### 2025年7月6日Supabase統合版テスト結果
+
+**テストデバイス**: `d067d407-cf73-4174-a9c1-d91fb60d64d0`
+
+```bash
+# ✅ Supabase統合版テスト
+curl "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-06"
+# → 成功: vibe_whisper_promptテーブルに保存
+
+# ✅ データベース確認
+python3 check_result.py
+# → 成功: データ保存確認完了
+```
+
+**処理結果**:
+- 📊 処理ファイル数: 2個
+- 📊 欠損ファイル数: 46個
+- ✅ プロンプト生成: 正常完了
+- ✅ データベース保存: 正常完了
+
+### 2025年7月5日従来版テスト結果
 
 **テストデバイス**: `d067d407-cf73-4174-a9c1-d91fb60d64d0`
 
@@ -192,7 +241,12 @@ curl "https://api.hey-watch.me/status/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-
 
 ## 🔄 処理フロー
 
-### EC2連携処理（推奨）
+### Supabase統合処理（新規・推奨）
+1. **vibe_whisperテーブルから読み込み**: 指定device_id、dateのレコードを取得
+2. **プロンプト生成**: transcriptionフィールドからテキスト抽出・統合
+3. **vibe_whisper_promptテーブルに保存**: UPSERT（既存レコードは更新）
+
+### EC2連携処理
 1. **EC2からファイル取得**: `{ec2_base_url}/status/{device_id}/{date}/transcriptions/{filename}`
 2. **ローカル処理**: メモリ上でテキスト抽出・プロンプト生成
 3. **ローカル保存**: `/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/prompt/`
