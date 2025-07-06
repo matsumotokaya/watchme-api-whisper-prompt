@@ -16,6 +16,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 # .envファイルの読み込み
 load_dotenv()
@@ -29,6 +30,15 @@ app = FastAPI(
     title="Mood Chart Prompt Generator API",
     description="1日分のトランスクリプションファイルを統合し、ChatGPT分析用プロンプトを生成 (Supabase対応版)",
     version="2.0.0"
+)
+
+# CORS設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 本番環境では適切に制限してください
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Supabaseクライアントの遅延初期化
