@@ -2,14 +2,14 @@
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
-## ✅ 最新アップデート (2025-07-06)
+## ✅ 最新アップデート (2025-07-14)
 
-**🆕 Supabase統合完了**: `vibe_whisper`テーブルから読み込み、`vibe_whisper_prompt`テーブルに保存
-**✅ 本番テスト完了**: 2025-07-06データで正常動作確認済み（処理ファイル数: 2個、欠損: 46個）
-**✅ カラム名修正**: `time_slot` → `time_block` への対応完了
-**✅ デバイスID移行完了**: `user_id` → `device_id` アーキテクチャへの完全移行
-**✅ Vault連携確認済み**: `emotion-timeline_gpt_prompt.json` のVaultサーバーへの正常アップロード
-**✅ 本番稼働準備完了**: EC2連携でのプロダクション環境対応
+**🆕 プロンプト形式更新**: 心理グラフ用JSON生成形式に変更（感情スコア配列、時間軸、統計情報を含む）
+**✅ Systemd統合完了**: EC2での自動起動・常時稼働に対応
+**✅ 古いエンドポイント削除**: ローカル版・EC2版を削除し、Supabase統合版のみに統一
+**✅ Supabase統合**: `vibe_whisper`テーブルから読み込み、`vibe_whisper_prompt`テーブルに保存
+**✅ 本番稼働中**: EC2（3.24.16.82:8009）で正常稼働中
+**✅ Docker対応**: Docker Composeによる簡単デプロイ
 
 ## 📋 詳細仕様書
 
@@ -20,7 +20,7 @@
 **正式版**: `main.py` を使用してください
 
 - ❌ `app.py`: 古いバージョン（廃止予定）
-- ✅ `main.py`: 正式版（EC2連携対応、デバイスID移行済み）
+- ✅ `main.py`: 正式版（Supabase統合版）
 
 ## 🚀 クイックスタート
 
@@ -48,29 +48,15 @@ pip install -r requirements.txt
 
 ### 起動
 
-**本番環境（EC2連携）**:
 ```bash
-export EC2_BASE_URL="https://api.hey-watch.me"
-uvicorn main:app --host 0.0.0.0 --port 8009 --reload
-```
-
-**開発環境（ローカル）**:
-```bash
-export EC2_BASE_URL="local"
 uvicorn main:app --host 0.0.0.0 --port 8009 --reload
 ```
 
 ### 基本的な使用方法
 
 ```bash
-# 🆕 Supabase統合版（推奨）- vibe_whisperテーブルから読み込み、vibe_whisper_promptテーブルに保存
+# 🆕 Supabase統合版 - vibe_whisperテーブルから読み込み、vibe_whisper_promptテーブルに保存
 curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-06"
-
-# EC2連携でプロンプト生成 - デバイスID使用
-curl -X GET "http://localhost:8009/generate-mood-prompt-ec2?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-05"
-
-# ローカル処理 - デバイスID使用
-curl -X GET "http://localhost:8009/generate-mood-prompt?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-05"
 
 # ヘルスチェック
 curl -X GET "http://localhost:8009/health"
@@ -81,7 +67,8 @@ curl -X GET "http://localhost:8009/health"
 ```json
 {
   "status": "success",
-  "output_path": "/data/data_accounts/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-07-05/prompt/emotion-timeline_gpt_prompt.json"
+  "message": "プロンプトが正常に生成され、データベースに保存されました。処理済み: 5個、欠損: 43個",
+  "output_path": null
 }
 ```
 
@@ -92,70 +79,48 @@ curl -X GET "http://localhost:8009/health"
 | エンドポイント | 機能 | 状態 | 出力先 | デバイスID対応 |
 |---------------|------|------|-------------|-------------|
 | `GET /health` | ヘルスチェック | ✅ **完了** | - | N/A |
-| `GET /generate-mood-prompt` | ローカルプロンプト生成 | ✅ **完了** | ローカルファイル | ✅ |
-| `GET /generate-mood-prompt-ec2` | EC2プロンプト生成・Vaultアップロード | ✅ **完了** | EC2/Vault | ✅ |
 | `GET /generate-mood-prompt-supabase` | Supabase統合版 | ✅ **完了** | vibe_whisper_promptテーブル | ✅ |
 
 ### ✅ 実装完了機能
 
 1. **🆕 Supabase統合**: `vibe_whisper`テーブルからデータ読み込み、`vibe_whisper_prompt`テーブルへ保存
-2. **✅ デバイスID移行**: 全エンドポイントで`user_id` → `device_id`移行完了
-3. **✅ プロンプト生成**: 48時間分のトランスクリプション統合処理
-4. **✅ Vault統合**: `emotion-timeline_gpt_prompt.json`のVaultサーバーアップロード
-5. **✅ EC2連携**: 本番環境での動作確認済み
+2. **✅ デバイスID対応**: `device_id`を使用したデータ処理
+3. **✅ プロンプト生成**: 48個（24時間分）のトランスクリプション統合処理
 
 ### 🔄 WatchMeエコシステムでの位置づけ
 
 ```
-[Supabase統合版]
 iOS App → Whisper API → vibe_whisper → [このAPI] → vibe_whisper_prompt → ChatGPT API
                                              ↑
                                     プロンプト生成・DB保存
-
-[既存版]
-iOS App → Vault API → Whisper API → [このAPI] → ChatGPT API → 最終結果
-                                         ↑
-                              emotion-timeline_gpt_prompt.json
-                                    Vault保存完了
 ```
 
 **このAPIの役割**: 
-- Supabase版: vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
-- 既存版: Whisperトランスクリプション → ChatGPT分析用プロンプト生成・Vault保存
+- vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
 
-### EC2連携機能
+## 📁 データ構造
 
-- EC2サーバーからのファイル取得
-- ローカル処理
-- EC2サーバーへの結果アップロード
-- 環境変数による設定制御
+### 入力データ（vibe_whisperテーブル）
+- `device_id`: デバイス識別子
+- `date`: 日付（YYYY-MM-DD）
+- `time_block`: 時間帯（例: "00-00", "00-30"）
+- `transcription`: 音声転写テキスト
 
-## 📁 ファイル構造
+### 出力データ（vibe_whisper_promptテーブル）
+- `device_id`: デバイス識別子
+- `date`: 日付（YYYY-MM-DD）
+- `prompt`: 生成されたChatGPT用プロンプト（心理グラフJSON生成形式）
+- `processed_files`: 処理されたレコード数
+- `missing_files`: 欠損している時間帯のリスト
+- `generated_at`: 生成日時
 
-### 入力ファイル（トランスクリプション）
-```
-# ローカル
-/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/transcriptions/
-├── 00-00.json  # 00:00-00:30の音声転写
-├── 00-30.json  # 00:30-01:00の音声転写
-├── 01-00.json
-├── ...
-└── 23-30.json  # 23:30-24:00の音声転写
-
-# Vault (EC2)
-/data/data_accounts/{device_id}/{date}/transcriptions/
-```
-
-### 出力ファイル（生成プロンプト）
-```
-# ローカル
-/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/prompt/
-└── emotion-timeline_gpt_prompt.json  # ChatGPT分析用プロンプト
-
-# Vault (EC2) - 自動アップロード
-/data/data_accounts/{device_id}/{date}/prompt/
-└── emotion-timeline_gpt_prompt.json  # ChatGPT分析用プロンプト
-```
+### プロンプト形式の特徴
+生成されるプロンプトは、ChatGPTに心理グラフ用のJSONデータを生成させるための専用形式です：
+- **timePoints**: 48個の時間点（00:00〜23:30）
+- **emotionScores**: -100〜+100の感情スコア配列（欠損はnull）
+- **統計情報**: 平均スコア、ポジティブ/ネガティブ/ニュートラルな時間
+- **insights**: 1日の心理的傾向の自然文記述
+- **emotionChanges**: 感情の大きな変化点
 
 ## 🔧 環境変数
 
@@ -163,8 +128,6 @@ iOS App → Vault API → Whisper API → [このAPI] → ChatGPT API → 最終
 |--------|-----|------|
 | `SUPABASE_URL` | `https://your-project.supabase.co` | SupabaseプロジェクトURL |
 | `SUPABASE_KEY` | `your-anon-key` | Supabase Anonymous Key |
-| `EC2_BASE_URL` | `"https://api.hey-watch.me"` | 本番EC2サーバー（Vault連携） |
-| `EC2_BASE_URL` | `"local"` | ローカル開発モード |
 
 ## 🧪 テスト実績
 
@@ -188,29 +151,6 @@ python3 check_result.py
 - ✅ プロンプト生成: 正常完了
 - ✅ データベース保存: 正常完了
 
-### 2025年7月5日従来版テスト結果
-
-**テストデバイス**: `d067d407-cf73-4174-a9c1-d91fb60d64d0`
-
-```bash
-# ✅ ローカル処理テスト
-curl "http://localhost:8009/generate-mood-prompt?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-05"
-# → 成功: ローカルファイル生成
-
-# ✅ EC2連携テスト  
-curl "http://localhost:8009/generate-mood-prompt-ec2?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-05"
-# → 成功: Vaultサーバーにアップロード
-
-# ✅ Vault確認
-curl "https://api.hey-watch.me/status/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-07-05/prompt/emotion-timeline_gpt_prompt.json"
-# → 成功: ファイル確認完了
-```
-
-**処理結果**:
-- 📊 処理ファイル数: 5個
-- 📊 欠損ファイル数: 43個
-- ✅ プロンプト生成: 正常完了
-- ✅ Vaultアップロード: 正常完了
 
 ## 📊 レスポンス例
 
@@ -218,11 +158,8 @@ curl "https://api.hey-watch.me/status/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-
 ```json
 {
   "status": "success",
-  "message": "プロンプトが正常に生成され、EC2にアップロードされました",
-  "output_path": "/data/data_accounts/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-07-05/prompt/emotion-timeline_gpt_prompt.json",
-  "files_processed": 45,
-  "missing_files": ["02-00.json", "14-30.json", "23-00.json"],
-  "ec2_upload_status": "success"
+  "message": "プロンプトが正常に生成され、データベースに保存されました。処理済み: 5個、欠損: 43個",
+  "output_path": null
 }
 ```
 
@@ -230,32 +167,16 @@ curl "https://api.hey-watch.me/status/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-
 ```json
 {
   "status": "error",
-  "message": "ディレクトリが存在しません",
-  "error_code": "DIRECTORY_NOT_FOUND",
-  "details": {
-    "device_id": "d067d407-cf73-4174-a9c1-d91fb60d64d0",
-    "date": "2025-07-05"
-  }
+  "detail": "無効な日付形式です。YYYY-MM-DD形式で入力してください。"
 }
 ```
 
 ## 🔄 処理フロー
 
-### Supabase統合処理（新規・推奨）
+### Supabase統合処理
 1. **vibe_whisperテーブルから読み込み**: 指定device_id、dateのレコードを取得
 2. **プロンプト生成**: transcriptionフィールドからテキスト抽出・統合
 3. **vibe_whisper_promptテーブルに保存**: UPSERT（既存レコードは更新）
-
-### EC2連携処理
-1. **EC2からファイル取得**: `{ec2_base_url}/status/{device_id}/{date}/transcriptions/{filename}`
-2. **ローカル処理**: メモリ上でテキスト抽出・プロンプト生成
-3. **ローカル保存**: `/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/prompt/`
-4. **EC2アップロード**: `{ec2_base_url}/upload-prompt`
-
-### ローカル処理
-1. **ローカルファイル読み込み**: `/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/transcriptions/`
-2. **プロンプト生成**: メモリ上でテキスト抽出・プロンプト生成
-3. **ローカル保存**: `/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/transcriptions/`
 
 ## 🛡️ 堅牢性
 
@@ -279,31 +200,95 @@ curl "https://api.hey-watch.me/status/d067d407-cf73-4174-a9c1-d91fb60d64d0/2025-
 - **ReDoc**: `http://localhost:8009/redoc`
 - **ヘルスチェック**: `http://localhost:8009/health`
 
+## 🚀 本番環境デプロイ（EC2）
+
+### 初回デプロイ手順
+
+```bash
+# 1. EC2サーバーにSSH接続
+ssh -i ~/watchme-key.pem ubuntu@3.24.16.82
+
+# 2. プロジェクトディレクトリに移動
+cd api_gen-prompt_mood-chart_v1
+
+# 3. .envファイルを作成（Supabase認証情報を設定）
+nano .env
+
+# 4. Dockerイメージをビルド
+docker-compose build
+
+# 5. サービスを起動
+docker-compose up -d
+```
+
+### Systemdによる自動起動設定（設定済み）
+
+本番環境では、Systemdサービスとして設定されており、EC2インスタンスの起動時に自動的にAPIが起動します。
+
+```bash
+# サービスの状態確認
+sudo systemctl status mood-chart-api
+
+# サービスの再起動
+sudo systemctl restart mood-chart-api
+
+# サービスのログ確認
+sudo journalctl -u mood-chart-api -f
+
+# 手動でサービスを停止
+sudo systemctl stop mood-chart-api
+
+# 手動でサービスを開始
+sudo systemctl start mood-chart-api
+```
+
+### コード更新時の手順
+
+```bash
+# 1. EC2サーバーにSSH接続
+ssh -i ~/watchme-key.pem ubuntu@3.24.16.82
+
+# 2. プロジェクトディレクトリに移動
+cd api_gen-prompt_mood-chart_v1
+
+# 3. 最新コードを取得（Gitを使用している場合）
+git pull origin main
+
+# 4. Dockerイメージを再ビルド
+docker-compose build
+
+# 5. サービスを再起動
+sudo systemctl restart mood-chart-api
+
+# 6. 動作確認
+curl http://localhost:8009/health
+```
+
 ## 🐛 トラブルシューティング
 
 ### よくある問題と解決方法
 
 | 問題 | 原因 | 解決方法 |
 |------|------|----------|
-| **404エラー** | EC2サーバー上にファイルが存在しない | 正常な状態です。欠損ファイルとして処理されます |
-| **422エラー** | EC2アップロードエンドポイントの仕様変更 | EC2サーバーの仕様を確認してください |
-| **Address already in use** | 既存のプロセスが動作中 | `pkill -f uvicorn` でプロセスを停止 |
-| **Permission denied** | ファイルアクセス権限不足 | ディレクトリの読み書き権限を確認 |
+| **Invalid API key** | Supabase認証情報が無効 | .envファイルのSUPABASE_URLとSUPABASE_KEYを確認 |
+| **Address already in use** | 既存のプロセスが動作中 | `sudo systemctl stop mood-chart-api` でサービスを停止 |
+| **データが見つからない** | 指定日付のデータが存在しない | vibe_whisperテーブルにデータが存在するか確認 |
+| **ModuleNotFoundError: supabase** | Supabaseライブラリバージョンの不一致 | requirements.txtでsupabase==2.0.0を指定 |
 
 ### デバッグコマンド
 
 ```bash
-# プロセス確認
-ps aux | grep uvicorn
+# Dockerコンテナの状態確認
+docker-compose ps
 
-# プロセス停止
-pkill -f uvicorn
+# Dockerコンテナのログ確認
+docker-compose logs -f
 
-# デバッグモードで起動
-uvicorn main:app --host 0.0.0.0 --port 8009 --reload --log-level debug
+# コンテナ内に入って調査
+docker exec -it api_gen_prompt_mood_chart bash
 
-# 権限確認
-ls -la /Users/kaya.matsumoto/data/data_accounts/
+# API直接テスト（EC2上で）
+curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-14"
 ```
 
 ## 🤝 Streamlit連携
@@ -312,19 +297,17 @@ ls -la /Users/kaya.matsumoto/data/data_accounts/
 import requests
 import streamlit as st
 
-# 環境選択
-environment = st.selectbox("環境", ["Local", "EC2"])
 base_url = "http://localhost:8009"
 
 # API呼び出し
 response = requests.get(
-    f"{base_url}/generate-mood-prompt-ec2",
+    f"{base_url}/generate-mood-prompt-supabase",
     params={"device_id": device_id, "date": date}
 )
 
 if response.status_code == 200:
     result = response.json()
-    st.success(f"✅ プロンプト生成完了: {result['output_path']}")
+    st.success(f"✅ プロンプト生成完了")
     st.json(result)
 else:
     st.error(f"❌ エラー: {response.text}")

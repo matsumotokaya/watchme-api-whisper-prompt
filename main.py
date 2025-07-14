@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """
 Mood Chart Prompt Generator API
-1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
+1日分（48個）のトランスクリプションを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 Supabase対応版: vibe_whisperテーブルから読み込み、vibe_whisper_promptテーブルに保存
 """
 
 import os
 import json
 import uvicorn
-import aiohttp
-import asyncio
 from datetime import datetime
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -21,14 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 # .envファイルの読み込み
 load_dotenv()
 
-from supabase_client import SupabaseClient
-
-print(f"🔧 EC2_BASE_URL = {os.getenv('EC2_BASE_URL')}")
+from supabase import create_client, Client
 
 # FastAPIアプリケーションの初期化
 app = FastAPI(
     title="Mood Chart Prompt Generator API",
-    description="1日分のトランスクリプションファイルを統合し、ChatGPT分析用プロンプトを生成 (Supabase対応版)",
+    description="1日分のトランスクリプションを統合し、ChatGPT分析用プロンプトを生成 (Supabase対応版)",
     version="2.0.0"
 )
 
@@ -49,256 +44,44 @@ def get_supabase_client():
     global supabase_client
     if supabase_client is None:
         try:
-            supabase_client = SupabaseClient()
-            print("✅ Supabase client initialized successfully")
+            url = os.getenv("SUPABASE_URL")
+            key = os.getenv("SUPABASE_KEY")
+            
+            if not url or not key:
+                raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+            
+            supabase_client = create_client(url, key)
+            print(f"✅ Supabase client initialized")
         except Exception as e:
             print(f"❌ Failed to initialize Supabase client: {e}")
-            raise e
+            raise
     return supabase_client
 
+# レスポンスモデル
 class PromptResponse(BaseModel):
     status: str
-    output_path: str
-
-class ErrorResponse(BaseModel):
-    detail: str
-
-def extract_text_from_json(data: Dict[str, Any]) -> str:
-    """
-    JSONデータからテキストを抽出する関数
-    複数のフィールド名（text, transcript, content, transcription）に対応
-    """
-    text_fields = ["text", "transcript", "content", "transcription"]
-    
-    def recursive_extract(obj):
-        if isinstance(obj, dict):
-            # 直接テキストフィールドを探す
-            for field in text_fields:
-                if field in obj and isinstance(obj[field], str) and obj[field].strip():
-                    return obj[field].strip()
-            
-            # 再帰的に探索
-            for value in obj.values():
-                result = recursive_extract(value)
-                if result:
-                    return result
-        elif isinstance(obj, list):
-            for item in obj:
-                result = recursive_extract(item)
-                if result:
-                    return result
-        elif isinstance(obj, str) and obj.strip():
-            return obj.strip()
-        
-        return None
-    
-    return recursive_extract(data) or ""
-
-async def load_transcription_files_ec2(device_id: str, date: str, ec2_base_url: str = None) -> tuple[List[str], List[str], List[str]]:
-    """
-    EC2用：指定されたユーザーと日付のトランスクリプションファイルをEC2から取得し、
-    メモリ上で処理（一時ファイル保存なし）
-    
-    EC2パス: /data/data_accounts/{device_id}/{date}/transcriptions/
-    
-    Returns:
-        tuple: (texts, processed_files, missing_files)
-    """
-    import aiohttp
-    
-    texts = []
-    processed_files = []
-    missing_files = []
-    
-    # EC2サーバーのベースURL（環境変数から取得、テスト時はローカルファイルを使用）
-    if ec2_base_url is None:
-        ec2_base_url = os.getenv("EC2_BASE_URL", "local")  # "local"の場合はローカルファイルを使用
-    
-    print(f"🔧 load_transcription_files_ec2: ec2_base_url = {ec2_base_url}")
-    
-    # テスト環境の場合はローカルファイルを使用
-    if ec2_base_url == "local":
-        # ローカルファイルから直接読み込み（テスト用）
-        source_dir = Path(f"/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/transcriptions")
-        
-        # ソースディレクトリが存在しない場合は空の結果を返す（エラーではない）
-        if not source_dir.exists():
-            print(f"📁 ディレクトリが存在しません（正常）: {source_dir}")
-            # 48個全てのファイルをmissing_filesに追加
-            for hour in range(24):
-                for minute in [0, 30]:
-                    filename = f"{hour:02d}-{minute:02d}.json"
-                    missing_files.append(filename)
-            return texts, processed_files, missing_files
-        
-        for hour in range(24):
-            for minute in [0, 30]:
-                filename = f"{hour:02d}-{minute:02d}.json"
-                
-                # 既存のローカルファイルがあるかチェック
-                existing_file_path = source_dir / filename
-                
-                if existing_file_path.exists():
-                    try:
-                        with open(existing_file_path, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                        
-                        # メモリ上で直接処理（ファイル保存なし）
-                        text = extract_text_from_json(data)
-                        if text:
-                            texts.append(f"[{hour:02d}:{minute:02d}] {text}")
-                            processed_files.append(filename)
-                        else:
-                            missing_files.append(f"{filename} (テキストなし)")
-                    
-                    except (json.JSONDecodeError, Exception) as e:
-                        missing_files.append(f"{filename} (読み込みエラー: {str(e)})")
-                else:
-                    missing_files.append(filename)
-    
-    else:
-        # 実際のEC2サーバーからファイルを取得
-        async with aiohttp.ClientSession() as session:
-            # 48個のファイル（00-00.json ～ 23-30.json）を処理
-            for hour in range(24):
-                for minute in [0, 30]:
-                    filename = f"{hour:02d}-{minute:02d}.json"
-                    
-                    # EC2からファイルを取得
-                    ec2_file_url = f"{ec2_base_url}/status/{device_id}/{date}/transcriptions/{filename}"
-                    
-                    try:
-                        async with session.get(ec2_file_url) as response:
-                            if response.status == 200:
-                                # メモリ上で直接処理（ファイル保存なし）
-                                file_content = await response.json()
-                                
-                                # テキストを抽出
-                                text = extract_text_from_json(file_content)
-                                if text:
-                                    texts.append(f"[{hour:02d}:{minute:02d}] {text}")
-                                    processed_files.append(filename)
-                                else:
-                                    missing_files.append(f"{filename} (テキストなし)")
-                            else:
-                                missing_files.append(f"{filename} (EC2からの取得失敗: {response.status})")
-                    
-                    except aiohttp.ClientError as e:
-                        missing_files.append(f"{filename} (EC2接続エラー: {str(e)})")
-                    except Exception as e:
-                        missing_files.append(f"{filename} (処理エラー: {str(e)})")
-    
-    return texts, processed_files, missing_files
-
-def load_transcription_files(device_id: str, date: str) -> tuple[List[str], List[str], List[str]]:
-    """
-    指定されたユーザーと日付のトランスクリプションファイルを読み込む
-    
-    Returns:
-        tuple: (texts, processed_files, missing_files)
-    """
-    base_dir = Path(f"/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/transcriptions")
-    
-    texts = []
-    processed_files = []
-    missing_files = []
-    
-    # ディレクトリが存在しない場合は空の結果を返す（エラーではない）
-    if not base_dir.exists():
-        print(f"📁 ディレクトリが存在しません（正常）: {base_dir}")
-        # 48個全てのファイルをmissing_filesに追加
-        for hour in range(24):
-            for minute in [0, 30]:
-                filename = f"{hour:02d}-{minute:02d}.json"
-                missing_files.append(filename)
-        return texts, processed_files, missing_files
-    
-    # 48個のファイル（00-00.json ～ 23-30.json）を処理
-    for hour in range(24):
-        for minute in [0, 30]:
-            filename = f"{hour:02d}-{minute:02d}.json"
-            file_path = base_dir / filename
-            
-            if file_path.exists():
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
-                    text = extract_text_from_json(data)
-                    if text:
-                        texts.append(f"[{hour:02d}:{minute:02d}] {text}")
-                        processed_files.append(filename)
-                    else:
-                        missing_files.append(f"{filename} (テキストなし)")
-                
-                except (json.JSONDecodeError, Exception) as e:
-                    missing_files.append(f"{filename} (読み込みエラー: {str(e)})")
-            else:
-                missing_files.append(filename)
-    
-    return texts, processed_files, missing_files
-
-async def upload_file_to_ec2(local_file_path: Path, ec2_base_url: str, device_id: str, date: str) -> bool:
-    """
-    ローカルファイルをEC2サーバーにアップロードする
-    
-    Args:
-        local_file_path: ローカルファイルのパス
-        ec2_base_url: EC2サーバーのベースURL
-        device_id: デバイスID
-        date: 日付
-    
-    Returns:
-        bool: アップロード成功時True、失敗時False
-    """
-    if ec2_base_url == "local":
-        return False
-    
-    try:
-        import aiohttp
-        
-        async with aiohttp.ClientSession() as session:
-            # EC2サーバーのアップロードエンドポイント（正しいエンドポイント）
-            upload_url = f"{ec2_base_url}/upload-prompt"
-            
-            # ファイルデータの準備
-            data = aiohttp.FormData()
-            
-            # ファイルを開いてFormDataに追加
-            with open(local_file_path, 'rb') as file:
-                data.add_field('file', 
-                             file,
-                             filename="emotion-timeline_gpt_prompt.json",
-                             content_type='application/json')
-                
-                # エンドポイント側で device_id / date をディレクトリ名に使うなら一緒に送る
-                data.add_field('device_id', device_id)
-                data.add_field('date', date)
-                
-                # EC2にファイルをアップロード
-                async with session.post(upload_url, data=data, timeout=30) as response:
-                    if response.status == 200:
-                        response_data = await response.json()
-                        ec2_output_path = f"/data/data_accounts/{device_id}/{date}/prompt/emotion-timeline_gpt_prompt.json"
-                        print(f"✅ EC2アップロード成功: {ec2_output_path}")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        print(f"❌ EC2アップロード失敗 (Status: {response.status}): {error_text}")
-                        return False
-    
-    except aiohttp.ClientError as e:
-        print(f"❌ EC2接続エラー: {str(e)}")
-        return False
-    except Exception as e:
-        print(f"❌ EC2アップロード処理エラー: {str(e)}")
-        return False
+    message: Optional[str] = None
+    output_path: Optional[str] = None
 
 def generate_chatgpt_prompt(device_id: str, date: str, texts: List[str]) -> str:
     """
     ChatGPT分析用のプロンプトを生成
+    
+    Args:
+        device_id: デバイスID
+        date: 日付（YYYY-MM-DD形式）
+        texts: 時間帯ごとのテキストリスト
+        
+    Returns:
+        str: ChatGPT用プロンプト
     """
-    prompt_header = f"""📝 依頼概要
+    # テキストが空の場合の処理
+    if not texts:
+        timeline_text = "本日は記録されたテキストがありませんでした。"
+    else:
+        timeline_text = "\n".join(texts)
+    
+    prompt = f"""📝 依頼概要
 発話ログを元に1日分の心理状態を分析し、心理グラフ用のJSONデータを生成してください。
 
 🚨 重要：JSON品質要件
@@ -347,171 +130,14 @@ def generate_chatgpt_prompt(device_id: str, date: str, texts: List[str]) -> str:
 | **JSON品質要件** | **必ず有効なJSON形式で出力してください。NaNやInfinityは絶対に使用せず、欠損値は必ずnullで表現してください。** |
 
 📊 分析対象の発話ログ（{date}）:
-"""
+{timeline_text}"""
     
-    # テキストが空の場合の処理
-    if not texts:
-        prompt_body = "（この日は発話ログがありませんでした。全ての時間帯でnullのスコアを設定してください。NaNは使用禁止です。）"
-    else:
-        prompt_body = "\n".join(texts)
-    
-    return prompt_header + prompt_body
+    return prompt
 
 @app.get("/health")
 async def health_check():
     """ヘルスチェックエンドポイント"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-@app.get("/generate-mood-prompt", response_model=PromptResponse)
-async def generate_mood_prompt(
-    device_id: str = Query(..., description="デバイスID"),
-    date: str = Query(..., description="日付（YYYY-MM-DD形式）")
-):
-    """
-    指定されたユーザーと日付のトランスクリプションファイルを統合し、
-    ChatGPT分析用プロンプトを生成してJSONファイルに保存
-    """
-    print(f"📝 通常エンドポイントが呼ばれました: device_id={device_id}, date={date}")
-    
-    try:
-        # 日付形式の検証
-        try:
-            datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="無効な日付形式です。YYYY-MM-DD形式で入力してください。")
-        
-        # トランスクリプションファイルの読み込み
-        texts, processed_files, missing_files = load_transcription_files(device_id, date)
-        
-        # ログツールなので、テキストがなくても正常な状態
-        if not texts:
-            print(f"📊 有効なトランスクリプションファイルがありません（正常）: processed={len(processed_files)}, missing={len(missing_files)}")
-        else:
-            print(f"📊 トランスクリプションファイル処理完了: processed={len(processed_files)}, missing={len(missing_files)}")
-        
-        # ChatGPT用プロンプトの生成（テキストが空でも生成）
-        prompt = generate_chatgpt_prompt(device_id, date, texts)
-        
-        # 出力ディレクトリの作成
-        output_dir = Path(f"/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/transcriptions")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 出力データの準備
-        output_data = {
-            "device_id": device_id,
-            "date": date,
-            "prompt": prompt,
-            "processed_files": len(processed_files),
-            "missing_files": missing_files,
-            "generated_at": datetime.now().isoformat()
-        }
-        
-        # JSONファイルの保存
-        output_path = output_dir / "emotion-timeline_gpt_prompt.json"
-        with open(output_path, 'w', encoding='utf-8') as f:
-            # 注意：ChatGPTからの応答を処理する際は、NaN/Infinityをnullに変換するサニタイズ処理が必要
-            # json.dumps(obj, ensure_ascii=False, allow_nan=False) でNaN/Infinityを検出可能
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
-        
-        return PromptResponse(
-            status="success",
-            output_path=str(output_path)
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"内部サーバーエラー: {str(e)}")
-
-@app.get("/generate-mood-prompt-ec2", response_model=PromptResponse)
-async def generate_mood_prompt_ec2(
-    device_id: str = Query(..., description="デバイスID"),
-    date: str = Query(..., description="日付（YYYY-MM-DD形式）")
-):
-    """
-    EC2用エンドポイント：EC2サーバーから指定されたユーザーと日付のトランスクリプションファイルを取得し、
-    ローカルで処理してからEC2サーバーにアップロード
-    
-    処理フロー:
-    1. EC2からトランスクリプションファイルを取得 (または環境変数が"local"の場合はローカルファイル使用)
-    2. ローカルでプロンプト生成・一時保存
-    3. 生成されたファイルをEC2サーバーにアップロード
-    
-    EC2入力パス: /data/data_accounts/{device_id}/{date}/transcriptions/
-    EC2出力パス: /data/data_accounts/{device_id}/{date}/prompt/emotion-timeline_gpt_prompt.json
-    ローカル一時保存: /Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/prompt/emotion-timeline_gpt_prompt.json
-    
-    環境変数:
-    - EC2_BASE_URL="local": テスト用にローカルファイルのみ使用
-    - EC2_BASE_URL="http://your-ec2-server.com": 実際のEC2サーバーを使用
-    """
-    print(f"🚀 EC2エンドポイントが呼ばれました: device_id={device_id}, date={date}")
-    
-    try:
-        # 日付形式の検証
-        try:
-            datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="無効な日付形式です。YYYY-MM-DD形式で入力してください。")
-        
-        # EC2サーバーのベースURL（環境変数から取得、テスト時はローカルファイルを使用）
-        ec2_base_url = os.getenv("EC2_BASE_URL", "local")  # "local"の場合はローカルファイルを使用
-        
-        print(f"🔧 EC2エンドポイント: EC2_BASE_URL = {ec2_base_url}")
-        
-        # トランスクリプションファイルの読み込み（EC2から取得してローカル保存）
-        texts, processed_files, missing_files = await load_transcription_files_ec2(device_id, date, ec2_base_url)
-        
-        # ログツールなので、テキストがなくても正常な状態
-        if not texts:
-            print(f"📊 有効なトランスクリプションファイルがありません（正常）: processed={len(processed_files)}, missing={len(missing_files)}")
-        else:
-            print(f"📊 トランスクリプションファイル処理完了: processed={len(processed_files)}, missing={len(missing_files)}")
-        
-        # ChatGPT用プロンプトの生成（テキストが空でも生成）
-        prompt = generate_chatgpt_prompt(device_id, date, texts)
-        
-        # 出力データの準備
-        output_data = {
-            "device_id": device_id,
-            "date": date,
-            "prompt": prompt,
-            "processed_files": len(processed_files),
-            "missing_files": missing_files,
-            "generated_at": datetime.now().isoformat()
-        }
-        
-        # ローカルに一時保存
-        local_output_dir = Path(f"/Users/kaya.matsumoto/data/data_accounts/{device_id}/{date}/prompt")
-        local_output_dir.mkdir(parents=True, exist_ok=True)
-        local_output_path = local_output_dir / "emotion-timeline_gpt_prompt.json"
-        
-        with open(local_output_path, 'w', encoding='utf-8') as f:
-            # 注意：ChatGPTからの応答を処理する際は、NaN/Infinityをnullに変換するサニタイズ処理が必要
-            # json.dumps(obj, ensure_ascii=False, allow_nan=False) でNaN/Infinityを検出可能
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
-        
-        # EC2サーバーにファイルをアップロード
-        ec2_upload_success = await upload_file_to_ec2(local_output_path, ec2_base_url, device_id, date)
-        
-        # レスポンスの準備
-        if ec2_base_url == "local" or not ec2_upload_success:
-            # ローカル保存のみ、またはEC2アップロード失敗時
-            return PromptResponse(
-                status="success",
-                output_path=str(local_output_path)
-            )
-        else:
-            # EC2アップロード成功時
-            return PromptResponse(
-                status="success",
-                output_path=f"/data/data_accounts/{device_id}/{date}/prompt/emotion-timeline_gpt_prompt.json"
-            )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"内部サーバーエラー: {str(e)}")
 
 @app.get("/generate-mood-prompt-supabase", response_model=PromptResponse)
 async def generate_mood_prompt_supabase(
@@ -519,13 +145,28 @@ async def generate_mood_prompt_supabase(
     date: str = Query(..., description="日付（YYYY-MM-DD形式）")
 ):
     """
-    Supabase版エンドポイント：vibe_whisperテーブルからデータを取得し、
-    プロンプトを生成してvibe_whisper_promptテーブルに保存
+    Supabase統合版：vibe_whisperテーブルから指定されたデバイスと日付のトランスクリプションを取得し、
+    ChatGPT分析用プロンプトを生成してvibe_whisper_promptテーブルに保存
     
     処理フロー:
-    1. vibe_whisperテーブルから指定device_id、dateのデータを取得
-    2. 取得したデータからプロンプトを生成
-    3. vibe_whisper_promptテーブルに保存（UPSERT）
+    1. vibe_whisperテーブルから指定device_id、dateのレコードを取得
+    2. transcriptionフィールドからテキストを抽出・統合
+    3. ChatGPT用プロンプトを生成
+    4. vibe_whisper_promptテーブルにUPSERT（既存レコードは更新）
+    
+    入力テーブル: vibe_whisper
+    - device_id: デバイス識別子
+    - date: 日付（YYYY-MM-DD）
+    - time_block: 時間帯（例: "00-00", "00-30"）
+    - transcription: 音声転写テキスト
+    
+    出力テーブル: vibe_whisper_prompt
+    - device_id: デバイス識別子
+    - date: 日付（YYYY-MM-DD）
+    - prompt: 生成されたChatGPT用プロンプト
+    - processed_files: 処理されたレコード数
+    - missing_files: 欠損している時間帯のリスト
+    - generated_at: 生成日時
     """
     print(f"🌟 Supabaseエンドポイントが呼ばれました: device_id={device_id}, date={date}")
     
@@ -537,72 +178,82 @@ async def generate_mood_prompt_supabase(
             raise HTTPException(status_code=400, detail="無効な日付形式です。YYYY-MM-DD形式で入力してください。")
         
         # Supabaseクライアントの取得
-        client = get_supabase_client()
+        try:
+            client = get_supabase_client()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Supabaseクライアントの初期化に失敗しました: {str(e)}")
         
         # vibe_whisperテーブルからデータを取得
-        whisper_data = await client.get_vibe_whisper_data(device_id, date)
-        
-        # データからテキストを抽出して時系列順に整理
         texts = []
         processed_files = []
         missing_files = []
         
-        # 48個の時間スロットを確認
-        time_block_data = {item['time_block']: item for item in whisper_data}
-        
+        # 時間帯リスト（00-00から23-30まで）
+        time_blocks = []
         for hour in range(24):
-            for minute in [0, 30]:
-                time_block = f"{hour:02d}-{minute:02d}"
-                
-                if time_block in time_block_data:
-                    item = time_block_data[time_block]
-                    # transcriptionフィールドからテキストを抽出
-                    text = client.extract_text_from_transcription(item.get('transcription'))
-                    
-                    if text:
-                        texts.append(f"[{hour:02d}:{minute:02d}] {text}")
-                        processed_files.append(f"{time_block}.json")
-                    else:
-                        missing_files.append(f"{time_block}.json (テキストなし)")
-                else:
-                    missing_files.append(f"{time_block}.json")
+            for minute in ["00", "30"]:
+                time_blocks.append(f"{hour:02d}-{minute}")
         
-        print(f"📊 vibe_whisperデータ処理完了: processed={len(processed_files)}, missing={len(missing_files)}")
+        # 各時間帯のデータを取得
+        for time_block in time_blocks:
+            try:
+                # Supabaseから該当レコードを取得
+                response = client.table('vibe_whisper').select('transcription').eq('device_id', device_id).eq('date', date).eq('time_block', time_block).execute()
+                
+                if response.data and len(response.data) > 0:
+                    transcription = response.data[0].get('transcription', '').strip()
+                    if transcription:
+                        texts.append(f"[{time_block}] {transcription}")
+                        processed_files.append(time_block)
+                    else:
+                        missing_files.append(f"{time_block} (テキストなし)")
+                else:
+                    missing_files.append(time_block)
+                    
+            except Exception as e:
+                print(f"❌ 時間帯 {time_block} の取得エラー: {e}")
+                missing_files.append(f"{time_block} (取得エラー)")
+        
+        # デバッグ情報
+        print(f"✅ 処理済み: {len(processed_files)}個の時間帯")
+        print(f"❌ 欠損: {len(missing_files)}個の時間帯")
+        if missing_files[:5]:  # 最初の5個だけ表示
+            print(f"   欠損時間帯例: {missing_files[:5]}...")
         
         # ChatGPT用プロンプトの生成
         prompt = generate_chatgpt_prompt(device_id, date, texts)
         
-        # vibe_whisper_promptテーブルに保存
-        save_success = await client.save_to_vibe_whisper_prompt(
-            device_id=device_id,
-            target_date=date,
-            prompt=prompt,
-            processed_files=len(processed_files),
-            missing_files=missing_files
-        )
+        # vibe_whisper_promptテーブルに保存（UPSERT）
+        prompt_data = {
+            'device_id': device_id,
+            'date': date,
+            'prompt': prompt,
+            'processed_files': len(processed_files),
+            'missing_files': missing_files,
+            'generated_at': datetime.now().isoformat()
+        }
         
-        if save_success:
+        try:
+            # 既存レコードを更新または新規作成
+            response = client.table('vibe_whisper_prompt').upsert(prompt_data, on_conflict='device_id,date').execute()
+            
+            print(f"✅ vibe_whisper_promptテーブルに保存完了")
+            
             return PromptResponse(
                 status="success",
-                output_path=f"vibe_whisper_prompt table: device_id={device_id}, date={date}"
+                message=f"プロンプトが正常に生成され、データベースに保存されました。処理済み: {len(processed_files)}個、欠損: {len(missing_files)}個"
             )
-        else:
-            raise HTTPException(status_code=500, detail="vibe_whisper_promptテーブルへの保存に失敗しました")
+            
+        except Exception as e:
+            print(f"❌ データベース保存エラー: {e}")
+            raise HTTPException(status_code=500, detail=f"データベース保存エラー: {str(e)}")
         
     except HTTPException:
         raise
     except Exception as e:
+        print(f"❌ 予期しないエラー: {e}")
         raise HTTPException(status_code=500, detail=f"内部サーバーエラー: {str(e)}")
 
 if __name__ == "__main__":
-    print("🚀 Mood Chart Prompt Generator API を起動中...")
-    print("📍 サーバー: http://localhost:8009")
-    print("📚 ドキュメント: http://localhost:8009/docs")
-    
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8009,
-        reload=True,
-        log_level="info"
-    ) 
+    # アプリケーションの起動
+    uvicorn.run(app, host="0.0.0.0", port=8009)

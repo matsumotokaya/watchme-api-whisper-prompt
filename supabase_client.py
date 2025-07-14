@@ -17,6 +17,7 @@ class SupabaseClient:
         if not url or not key:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
         
+        # proxyパラメータを除外してクライアントを作成
         self.client: Client = create_client(url, key)
         print(f"✅ Supabase client initialized: {url}")
     
