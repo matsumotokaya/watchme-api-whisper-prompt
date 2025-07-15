@@ -2,9 +2,12 @@
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
-## ✅ 最新アップデート (2025-07-14)
+## ✅ 最新アップデート (2025-07-15)
 
-**🆕 プロンプト形式更新**: 心理グラフ用JSON生成形式に変更（感情スコア配列、時間軸、統計情報を含む）
+**🆕 外部URL公開**: `https://api.hey-watch.me/vibe-aggregator/` で外部からアクセス可能
+**✅ Nginxリバースプロキシ設定**: SSL/HTTPS対応、CORS設定完了
+**✅ マイクロサービス対応**: 他のサービスから簡単にAPI呼び出し可能
+**✅ プロンプト形式更新**: 心理グラフ用JSON生成形式に変更（感情スコア配列、時間軸、統計情報を含む）
 **✅ Systemd統合完了**: EC2での自動起動・常時稼働に対応
 **✅ 古いエンドポイント削除**: ローカル版・EC2版を削除し、Supabase統合版のみに統一
 **✅ Supabase統合**: `vibe_whisper`テーブルから読み込み、`vibe_whisper_prompt`テーブルに保存
@@ -55,11 +58,14 @@ uvicorn main:app --host 0.0.0.0 --port 8009 --reload
 ### 基本的な使用方法
 
 ```bash
-# 🆕 Supabase統合版 - vibe_whisperテーブルから読み込み、vibe_whisper_promptテーブルに保存
-curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-06"
+# 🆕 外部URL（本番環境）- マイクロサービス間で使用
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
 
-# ヘルスチェック
-curl -X GET "http://localhost:8009/health"
+# ヘルスチェック（外部URL）
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/health"
+
+# ローカル開発用
+curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
 ```
 
 ### 成功レスポンス例
@@ -67,7 +73,21 @@ curl -X GET "http://localhost:8009/health"
 ```json
 {
   "status": "success",
-  "message": "プロンプトが正常に生成され、データベースに保存されました。処理済み: 5個、欠損: 43個",
+  "message": "プロンプトが正常に生成され、データベースに保存されました。処理済み: 1個、欠損: 47個",
+  "output_path": null
+}
+```
+
+### 最新テスト結果（2025-07-15）
+
+```bash
+# 外部URL経由でのテスト
+curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
+
+# 結果
+{
+  "status": "success",
+  "message": "プロンプトが正常に生成され、データベースに保存されました。処理済み: 1個、欠損: 47個",
   "output_path": null
 }
 ```
@@ -195,7 +215,12 @@ python3 check_result.py
 
 ## 📚 API ドキュメント
 
-サーバー起動後、以下のURLでインタラクティブなAPIドキュメントにアクセスできます：
+### 本番環境（外部URL）
+- **Swagger UI**: `https://api.hey-watch.me/vibe-aggregator/docs`
+- **ReDoc**: `https://api.hey-watch.me/vibe-aggregator/redoc`
+- **ヘルスチェック**: `https://api.hey-watch.me/vibe-aggregator/health`
+
+### ローカル開発環境
 - **Swagger UI**: `http://localhost:8009/docs`
 - **ReDoc**: `http://localhost:8009/redoc`
 - **ヘルスチェック**: `http://localhost:8009/health`
@@ -297,7 +322,8 @@ curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d
 import requests
 import streamlit as st
 
-base_url = "http://localhost:8009"
+# 本番環境での使用
+base_url = "https://api.hey-watch.me/vibe-aggregator"
 
 # API呼び出し
 response = requests.get(
@@ -311,4 +337,57 @@ if response.status_code == 200:
     st.json(result)
 else:
     st.error(f"❌ エラー: {response.text}")
-``` 
+```
+
+## 🔗 マイクロサービス統合
+
+### 外部サービスからの利用方法
+
+```python
+import requests
+import asyncio
+import aiohttp
+
+# 同期版
+def generate_mood_prompt(device_id: str, date: str):
+    url = "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase"
+    params = {"device_id": device_id, "date": date}
+    
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"API Error: {response.text}")
+
+# 非同期版
+async def generate_mood_prompt_async(device_id: str, date: str):
+    url = "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase"
+    params = {"device_id": device_id, "date": date}
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                raise Exception(f"API Error: {await response.text()}")
+
+# 使用例
+result = generate_mood_prompt("d067d407-cf73-4174-a9c1-d91fb60d64d0", "2025-07-15")
+print(result)
+```
+
+### 利用可能なエンドポイント
+
+| エンドポイント | メソッド | 説明 | パラメータ |
+|---------------|---------|------|-----------|
+| `/health` | GET | ヘルスチェック | なし |
+| `/generate-mood-prompt-supabase` | GET | プロンプト生成 | `device_id`, `date` |
+| `/docs` | GET | Swagger UI | なし |
+| `/redoc` | GET | ReDoc | なし |
+
+### セキュリティ設定
+
+- ✅ HTTPS対応（SSL証明書あり）
+- ✅ CORS設定済み
+- ✅ 適切なヘッダー設定
+- ✅ レート制限対応（Nginxレベル） 
