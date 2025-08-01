@@ -1,4 +1,4 @@
-# Mood Chart Prompt Generator API
+# Vibe Aggregator(Prompt Generator) API | 心理グラフ生成用API
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
@@ -9,7 +9,6 @@
 **✅ マイクロサービス対応**: 他のサービスから簡単にAPI呼び出し可能
 **✅ プロンプト形式更新**: 心理グラフ用JSON生成形式に変更（感情スコア配列、時間軸、統計情報を含む）
 **✅ Systemd統合完了**: EC2での自動起動・常時稼働に対応
-**✅ 古いエンドポイント削除**: ローカル版・EC2版を削除し、Supabase統合版のみに統一
 **✅ Supabase統合**: `vibe_whisper`テーブルから読み込み、`vibe_whisper_prompt`テーブルに保存
 **✅ 本番稼働中**: EC2（3.24.16.82:8009）で正常稼働中
 **✅ Docker対応**: Docker Composeによる簡単デプロイ
@@ -17,13 +16,6 @@
 ## 📋 詳細仕様書
 
 **完全な仕様書**: [`API_DOCUMENTATION.md`](./API_DOCUMENTATION.md) をご参照ください
-
-## 🔥 重要：正式版ファイル
-
-**正式版**: `main.py` を使用してください
-
-- ❌ `app.py`: 古いバージョン（廃止予定）
-- ✅ `main.py`: 正式版（Supabase統合版）
 
 ## 🚀 クイックスタート
 
