@@ -120,7 +120,7 @@ def generate_chatgpt_prompt(device_id: str, date: str, texts: List[str]) -> str:
 |------|----------|
 | **timePoints** | **必ず出力JSONに含める必須項目です。** "00:00"〜"23:30"の48個を順に全て列挙してください。 |
 | **emotionScores** | **必ず48個の整数値で出力してください。** -100〜+100 の範囲で、小数は使用せず四捨五入して整数で返してください。 |
-| 空の発話ログ | 明確に発話がない（ドット記号のみなど）の場合は 0 をスコアとして記入してください。 |
+| 発話なし | "(発話なし)"と記載されている時間帯は、録音は成功したが言語的な情報がなかった時間帯です。0 をスコアとして記入してください。 |
 | 測定不能な欠損 | その時間帯のログが完全に欠損している（処理失敗やデータ未取得）場合は null をスコアとして記入してください。**欠損データのスコアは0ではありません** |
 | averageScore | nullは計算対象から除外し、全体の平均スコアを小数1桁で記入してください。全スロットがnullの場合は0.0で出力してください。 |
 | positiveHours / negativeHours / neutralHours | それぞれスコア > 0、< 0、= 0 の時間帯の合計時間（単位：0.5時間）を算出してください。nullは無視して構いません。 |
@@ -207,7 +207,9 @@ async def generate_mood_prompt_supabase(
                         texts.append(f"[{time_block}] {transcription}")
                         processed_files.append(time_block)
                     else:
-                        missing_files.append(f"{time_block} (テキストなし)")
+                        # 空文字列の場合：録音は成功したが発話なし
+                        texts.append(f"[{time_block}] (発話なし)")
+                        processed_files.append(time_block)
                 else:
                     missing_files.append(time_block)
                     
