@@ -2,7 +2,13 @@
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
-## ✅ 最新アップデート (2025-07-15)
+## ✅ 最新アップデート (2025-08-27)
+
+**🔧 重要修正**: 空文字列データの処理を修正 - 「発話なし(0点)」として正しく処理するように改善
+**📈 処理改善**: 処理済みファイル数が5個→25個に大幅改善（欠損データの誤判定を修正）
+**🚨 デプロイ手順強化**: 本番環境デプロイ時の検証プロセスを追加・改善
+
+### 過去のアップデート (2025-07-15)
 
 **🆕 外部URL公開**: `https://api.hey-watch.me/vibe-aggregator/` で外部からアクセス可能
 **✅ Nginxリバースプロキシ設定**: SSL/HTTPS対応、CORS設定完了
@@ -275,7 +281,7 @@ sudo systemctl stop mood-chart-api
 sudo systemctl start mood-chart-api
 ```
 
-### コード更新時の手順
+### コード更新時の手順（推奨）
 
 ```bash
 # 1. EC2サーバーにSSH接続
@@ -284,17 +290,66 @@ ssh -i ~/watchme-key.pem ubuntu@3.24.16.82
 # 2. プロジェクトディレクトリに移動
 cd api_gen-prompt_mood-chart_v1
 
-# 3. 最新コードを取得（Gitを使用している場合）
+# 3. 現在の状態を確認
+git status
+git log --oneline -2
+
+# 4. 最新コードを取得
 git pull origin main
 
-# 4. Dockerイメージを再ビルド
-docker-compose build
+# 5. 🚨重要：変更内容を確認（ファイルが実際に更新されているか）
+git diff HEAD~1 main.py  # 主要ファイルの変更確認
+ls -la main.py           # ファイルのタイムスタンプ確認
 
-# 5. サービスを再起動
-sudo systemctl restart mood-chart-api
+# 6. サービス完全停止
+sudo systemctl stop mood-chart-api
+docker-compose down
 
-# 6. 動作確認
+# 7. 🚨重要：キャッシュを無視した完全再ビルド
+docker-compose build --no-cache
+
+# 8. サービス再起動
+sudo systemctl start mood-chart-api
+
+# 9. ビルド結果の確認
+sudo systemctl status mood-chart-api
+docker-compose ps
+
+# 10. 🚨重要：コンテナ内ファイル確認（修正が反映されているか）
+docker-compose exec api grep -n "修正したコード" main.py
+
+# 11. 動作確認（複数のエンドポイント）
 curl http://localhost:8009/health
+curl "https://api.hey-watch.me/vibe-aggregator/health"
+
+# 12. 🚨重要：実際のAPI機能テスト
+curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?device_id=YOUR_DEVICE_ID&date=2025-08-27"
+```
+
+### 🚨 デプロイ時の注意点
+
+| チェック項目 | 確認コマンド | 期待結果 |
+|-------------|-------------|----------|
+| **ファイル更新確認** | `git diff HEAD~1` | 変更内容が表示される |
+| **Docker完全再ビルド** | `docker-compose build --no-cache` | キャッシュを使わずビルド |
+| **コンテナ内ファイル確認** | `docker-compose exec api cat main.py` | 修正版コードが確認できる |
+| **サービス起動確認** | `sudo systemctl status mood-chart-api` | active (running) 状態 |
+| **API動作確認** | `curl https://api.hey-watch.me/vibe-aggregator/health` | 正常なレスポンス |
+
+### 🔧 トラブル時の緊急手順
+
+```bash
+# ファイルが更新されていない場合
+scp -i ~/watchme-key.pem ./main.py ubuntu@3.24.16.82:~/api_gen-prompt_mood-chart_v1/
+
+# 完全リセット（最終手段）
+sudo systemctl stop mood-chart-api
+docker-compose down
+docker system prune -a -f  # ⚠️危険：全Dockerデータ削除
+git reset --hard HEAD
+git pull origin main
+docker-compose build --no-cache
+sudo systemctl start mood-chart-api
 ```
 
 ## 🐛 トラブルシューティング
