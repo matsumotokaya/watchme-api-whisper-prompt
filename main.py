@@ -204,13 +204,15 @@ async def generate_mood_prompt_supabase(
                 if response.data and len(response.data) > 0:
                     transcription = response.data[0].get('transcription', '').strip()
                     if transcription:
+                        # 発話あり：テキストを分析
                         texts.append(f"[{time_block}] {transcription}")
                         processed_files.append(time_block)
                     else:
-                        # 空文字列の場合：録音は成功したが発話なし
+                        # 空文字列の場合：録音は成功したが発話なし（0点として処理）
                         texts.append(f"[{time_block}] (発話なし)")
                         processed_files.append(time_block)
                 else:
+                    # レコードが存在しない場合のみ欠損として処理（nullとして扱う）
                     missing_files.append(time_block)
                     
             except Exception as e:
