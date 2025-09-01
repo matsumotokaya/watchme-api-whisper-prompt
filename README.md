@@ -55,15 +55,24 @@ uvicorn main:app --host 0.0.0.0 --port 8009 --reload
 
 ### 基本的な使用方法
 
+#### 1日分統合処理
 ```bash
-# 🆕 外部URL（本番環境）- マイクロサービス間で使用
+# 外部URL（本番環境）- マイクロサービス間で使用
 curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
-
-# ヘルスチェック（外部URL）
-curl -X GET "https://api.hey-watch.me/vibe-aggregator/health"
 
 # ローカル開発用
 curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
+```
+
+#### タイムブロック単位処理
+```bash
+# マルチモーダルプロンプト生成（Whisper + YAMNet + 観測対象者情報）
+curl -X GET "http://localhost:8009/generate-timeblock-prompt?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-01&time_block=16-00"
+```
+
+#### ヘルスチェック
+```bash
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/health"
 ```
 
 ### 成功レスポンス例
@@ -94,43 +103,100 @@ curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?dev
 
 ### ✅ 完了済みエンドポイント
 
-| エンドポイント | 機能 | 状態 | 出力先 | デバイスID対応 |
-|---------------|------|------|-------------|-------------|
-| `GET /health` | ヘルスチェック | ✅ **完了** | - | N/A |
-| `GET /generate-mood-prompt-supabase` | Supabase統合版 | ✅ **完了** | vibe_whisper_promptテーブル | ✅ |
+| エンドポイント | 機能 | 出力先 | データソース |
+|---------------|------|-------------|-------------|
+| `GET /health` | ヘルスチェック | - | - |
+| `GET /generate-mood-prompt-supabase` | 1日分統合版（48タイムブロック） | vibe_whisper_promptテーブル | vibe_whisper |
+| `GET /generate-timeblock-prompt` | タイムブロック単位の高精度プロンプト生成 | dashboardテーブル（promptカラム） | vibe_whisper + behavior_yamnet + subjects |
 
 ### ✅ 実装完了機能
 
-1. **🆕 Supabase統合**: `vibe_whisper`テーブルからデータ読み込み、`vibe_whisper_prompt`テーブルへ保存
-2. **✅ デバイスID対応**: `device_id`を使用したデータ処理
-3. **✅ プロンプト生成**: 48個（24時間分）のトランスクリプション統合処理
+#### 1日分統合処理（/generate-mood-prompt-supabase）
+- 48個（24時間分）のトランスクリプション統合処理
+- `vibe_whisper`テーブルから読み込み、`vibe_whisper_prompt`テーブルへ保存
+- 1日の全体的な心理グラフ生成用
+
+#### タイムブロック単位処理（/generate-timeblock-prompt）
+- **30分単位での高精度分析**に特化
+- **マルチモーダルデータ統合**:
+  - 発話内容（vibe_whisperテーブル）
+  - 音響イベント（behavior_yamnetテーブル / YAMNet分類結果）
+  - 観測対象者情報（subjectsテーブル / 年齢・性別・備考）
+- **コンテキスト重視**:
+  - 時間帯判定（早朝/午前/午後/夕方/夜/深夜）
+  - 観測対象者の属性を考慮した分析
+- **注**: V1エンドポイント（Whisperのみ）は削除済み。V2相当の機能に統一
 
 ### 🔄 WatchMeエコシステムでの位置づけ
 
+#### 1日分統合処理フロー
 ```
 iOS App → Whisper API → vibe_whisper → [このAPI] → vibe_whisper_prompt → ChatGPT API
                                              ↑
                                     プロンプト生成・DB保存
 ```
 
+#### タイムブロック単位処理フロー（新）
+```
+vibe_whisper     ┐
+                 ├→ [このAPI] → dashboard (prompt) → ChatGPT API → dashboard (summary/score)
+behavior_yamnet  ┘
+```
+
 **このAPIの役割**: 
-- vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
+- 1日分統合: vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
+- タイムブロック処理: vibe_whisper + behavior_yamnetから読み込み → 高精度プロンプト生成 → dashboardテーブルに保存
 
 ## 📁 データ構造
 
-### 入力データ（vibe_whisperテーブル）
+### 入力データ
+
+#### vibe_whisperテーブル（発話データ）
 - `device_id`: デバイス識別子
 - `date`: 日付（YYYY-MM-DD）
 - `time_block`: 時間帯（例: "00-00", "00-30"）
 - `transcription`: 音声転写テキスト
 
-### 出力データ（vibe_whisper_promptテーブル）
+#### behavior_yamnetテーブル（音響イベントデータ）
+- `device_id`: デバイス識別子
+- `date`: 日付（YYYY-MM-DD）
+- `time_block`: 時間帯（例: "17-00", "17-30"）
+- `events`: YAMNet音響分類結果（JSONBフォーマット）
+  - `label`: イベント名（英語、例: "Speech", "Water", "Inside, small room"）
+  - `prob`: 確率（0.0〜1.0）
+
+#### subjectsテーブル（観測対象者情報）
+- `subject_id`: 観測対象者ID
+- `name`: 名前
+- `age`: 年齢
+- `gender`: 性別
+- `notes`: 備考（学校、趣味など）
+
+#### devicesテーブル（デバイス関連付け）
+- `device_id`: デバイス識別子
+- `subject_id`: 観測対象者ID（subjectsテーブルと関連）
+
+### 出力データ
+
+#### vibe_whisper_promptテーブル（1日分統合）
 - `device_id`: デバイス識別子
 - `date`: 日付（YYYY-MM-DD）
 - `prompt`: 生成されたChatGPT用プロンプト（心理グラフJSON生成形式）
 - `processed_files`: 処理されたレコード数
 - `missing_files`: 欠損している時間帯のリスト
 - `generated_at`: 生成日時
+
+#### dashboardテーブル（タイムブロック単位）
+- `device_id`: デバイス識別子
+- `date`: 日付（YYYY-MM-DD）
+- `time_block`: 時間帯（例: "17-00"）
+- `prompt`: 生成されたプロンプト（マルチモーダル分析用）
+- `summary`: ChatGPT分析結果のサマリー（api_gpt_v1で処理後）
+- `vibe_score`: 感情スコア（-100〜100、api_gpt_v1で処理後）
+- `analysis_result`: ChatGPT分析結果の完全なJSON（api_gpt_v1で処理後）
+- `processed_at`: 処理日時
+- `created_at`: 作成日時
+- `updated_at`: 更新日時
 
 ### プロンプト形式の特徴
 生成されるプロンプトは、ChatGPTに心理グラフ用のJSONデータを生成させるための専用形式です：

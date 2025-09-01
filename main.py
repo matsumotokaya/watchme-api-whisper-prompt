@@ -259,6 +259,63 @@ async def generate_mood_prompt_supabase(
         print(f"❌ 予期しないエラー: {e}")
         raise HTTPException(status_code=500, detail=f"内部サーバーエラー: {str(e)}")
 
+# ===============================
+# 新規: タイムブロック単位の処理エンドポイント
+# ===============================
+from timeblock_endpoint import (
+    process_timeblock_v2,
+    process_and_save_to_dashboard
+)
+
+@app.get("/generate-timeblock-prompt")
+async def generate_timeblock_prompt(
+    device_id: str = Query(..., description="デバイスID"),
+    date: str = Query(..., description="日付 (YYYY-MM-DD)"),
+    time_block: str = Query(..., description="タイムブロック (例: 14-30)")
+):
+    """
+    30分単位でWhisper + SEDデータ + 観測対象者情報を使用してプロンプト生成
+    """
+    try:
+        # Supabaseクライアント取得
+        supabase = get_supabase_client()
+        
+        # 処理実行
+        result = await process_timeblock_v2(supabase, device_id, date, time_block)
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/test-timeblock")
+async def test_timeblock_processing():
+    """
+    テスト用エンドポイント: サンプルデータで動作確認
+    """
+    try:
+        # テスト用の固定値
+        test_device_id = "d067d407-cf73-4174-a9c1-d91fb60d64d0"
+        test_date = "2025-08-31"
+        test_time_block = "14-30"
+        
+        supabase = get_supabase_client()
+        
+        # V1とV2の両方をテスト
+        result_v1 = await process_timeblock_v1(supabase, test_device_id, test_date, test_time_block)
+        result_v2 = await process_timeblock_v2(supabase, test_device_id, test_date, test_time_block)
+        
+        return {
+            "message": "テスト完了",
+            "v1_result": result_v1,
+            "v2_result": result_v2
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     # アプリケーションの起動
     uvicorn.run(app, host="0.0.0.0", port=8009)
