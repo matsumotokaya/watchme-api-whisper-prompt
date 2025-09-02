@@ -1,8 +1,8 @@
 """
 Time Block Processing Endpoint
 ===============================
-30分単位（タイムブロック）でデータを処理する新エンドポイント
-Phase 1: Whisperデータのみ
+30分単位（タイムブロック）でデータを処理するエンドポイント
+Phase 1: Transcriptionデータのみ
 Phase 2: + SEDデータ (behavior_summary)
 Phase 3: + OpenSMILE
 """
@@ -97,7 +97,7 @@ async def get_sed_data(supabase_client, device_id: str, date: str, time_block: s
 def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[list], time_block: str, 
                               date: str = None, subject_info: Optional[Dict] = None) -> str:
     """
-    Whisper + SEDデータ + 観測対象者情報でプロンプト生成
+    Transcription + SEDデータ + 観測対象者情報でプロンプト生成
     英語ラベルと確率をそのまま使用し、コンテキストを重視した分析を促す
     """
     prompt_parts = []
@@ -122,13 +122,14 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     
     # ヘッダー
     prompt_parts.append(f"""📝 分析依頼
-以下は{date if date else ''}の{time_block}（{time_context}）の30分間のマルチモーダルデータです。
-発話内容と音響イベントを総合的に分析し、その時間帯の心理状態と活動を推定してください。
+以下は録音デバイスによる1分間音声データから抽出された、発話内容と音響イベント特徴情報のマルチモーダルデータです。
+観測対象者情報と、発話内容、音響イベント、日時、日本における季節、一般的な季節のイベントなど観測対象の生活をリアルに総合的に分析し、そ心理状態と活動を推定してください。
+【日時】
+{date if date else ''}の{time_block}（{time_context}）
 
 🚨 重要な注意事項：
-- 音響イベント検出（YAMNet）は精度が低く、誤検出が多いです
+- 音響イベント検出（YAMNet）は誤検出が多いため参考程度に
 - 発話内容、時間帯、文脈を優先して判断してください
-- 音響イベントは参考程度に留めてください
 """)
     
     # 観測対象者情報
@@ -161,8 +162,8 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     
     # SEDデータ（音響イベント）
     if sed_data:
-        # 確率の高い上位10個のイベントのみ表示
-        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)[:10]
+        # 確率の高い上位20個のイベントのみ表示
+        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)[:20]
         
         events_formatted = []
         for event in sorted_events:
@@ -173,7 +174,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         
         prompt_parts.append(f"""
 【検出された音響イベント（YAMNet）】
-※精度が低いため参考程度に。発話内容と時間帯から総合的に判断してください。
+※発話内容と時間帯から総合的に判断してください。
 {chr(10).join(events_formatted)}
 """)
     else:
@@ -191,7 +192,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 {{
   "time_block": "{time_block}",
   "summary": "この30分間の状況を2-3文で説明。発話内容と時間帯を重視。",
-  "vibe_score": -100,
+  "vibe_score": -36,
   "confidence_score": 0.85,
   "key_observations": [
     "観察された重要な点1",
@@ -209,7 +210,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 🔍 **必須遵守ルール**
 | 要素 | 指示内容 |
 |------|----------|
-| **vibe_score** | -100〜+100の整数値。ポジティブ感情は正、ネガティブ感情は負、中立は0付近 |
+| **vibe_score** | -100〜+100の整数値。ポジティブ感情は正、ネガティブ感情は負、中立は0付近 強い兆候がある場合は ±60 以上を積極使用 気分の強弱をなるべく大きく表現し -100〜+100 をフルレンジで使い、中央付近に集中させない |
 | **confidence_score** | 0.0〜1.0の小数値。分析の確信度（データが少ない場合は低く） |
 | **発話なし時の処理** | "(発話なし)"の場合、時間帯から活動を推測（深夜なら睡眠、日中なら集中作業など） |
 | **音響イベントの扱い** | 発話内容や時間帯と矛盾する場合は無視。文脈に合う場合のみ参考に |
@@ -301,6 +302,7 @@ async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_
         "device_id": device_id,
         "date": date,
         "time_block": time_block,
+        "prompt": prompt,  # プロンプトを返り値に追加
         "prompt_length": len(prompt),
         "has_transcription": transcription is not None and len(transcription.strip()) > 0,
         "has_sed_data": sed_data is not None and len(sed_data) > 0,

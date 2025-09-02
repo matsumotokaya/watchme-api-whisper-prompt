@@ -290,8 +290,10 @@ python3 check_result.py
 - **Python**: 3.11.8
 - **フレームワーク**: FastAPI
 - **非同期処理**: aiohttp
+- **データベース**: Supabase (PostgreSQL)
 - **ファイル処理**: pathlib
 - **ポート**: 8009
+- **必須ライブラリ**: fastapi, uvicorn, pydantic, python-multipart, requests, aiohttp, supabase
 
 ## 📚 API ドキュメント
 
@@ -428,6 +430,8 @@ sudo systemctl start mood-chart-api
 | **Address already in use** | 既存のプロセスが動作中 | `sudo systemctl stop mood-chart-api` でサービスを停止 |
 | **データが見つからない** | 指定日付のデータが存在しない | vibe_whisperテーブルにデータが存在するか確認 |
 | **ModuleNotFoundError: supabase** | Supabaseライブラリバージョンの不一致 | requirements.txtでsupabase==2.0.0を指定 |
+| **JSON解析エラー** | ChatGPTレスポンスの形式不正 | JSON部分を抽出して安全に解析（JSONDecodeError対策） |
+| **レート制限エラー** | API呼び出し頻度が高い | 指数バックオフでリトライ処理を実装 |
 
 ### デバッグコマンド
 
@@ -443,6 +447,10 @@ docker exec -it api_gen_prompt_mood_chart bash
 
 # API直接テスト（EC2上で）
 curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-14"
+
+# デバッグ用スクリプト（利用可能）
+python3 check_rls_issue.py  # RLS問題の診断
+python3 test_direct.py       # データ取得テスト
 ```
 
 ## 🤝 Streamlit連携
@@ -488,7 +496,7 @@ def generate_mood_prompt(device_id: str, date: str):
     else:
         raise Exception(f"API Error: {response.text}")
 
-# 非同期版
+# 非同期版（推奨）
 async def generate_mood_prompt_async(device_id: str, date: str):
     url = "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase"
     params = {"device_id": device_id, "date": date}
@@ -499,6 +507,18 @@ async def generate_mood_prompt_async(device_id: str, date: str):
                 return await response.json()
             else:
                 raise Exception(f"API Error: {await response.text()}")
+
+# レート制限対応版
+async def generate_prompt_with_retry(device_id: str, date: str, max_retries: int = 3):
+    for attempt in range(max_retries):
+        try:
+            return await generate_mood_prompt_async(device_id, date)
+        except Exception as e:
+            if "rate_limit" in str(e).lower() and attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 60  # 指数バックオフ
+                await asyncio.sleep(wait_time)
+                continue
+            raise e
 
 # 使用例
 result = generate_mood_prompt("d067d407-cf73-4174-a9c1-d91fb60d64d0", "2025-07-15")
