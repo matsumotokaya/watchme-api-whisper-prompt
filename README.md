@@ -2,6 +2,16 @@
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
+> **注意**: 本番環境では`api_gen_prompt_mood_chart`という名前でECRからDockerイメージとしてデプロイされています。
+
+## 🐳 本番環境情報
+
+- **ECRリポジトリ**: `754724220380.dkr.ecr.ap-southeast-2.amazonaws.com/watchme-api-vibe-aggregator`
+- **コンテナ名**: `api_gen_prompt_mood_chart`
+- **ポート**: 8009
+- **公開URL**: `https://api.hey-watch.me/vibe-aggregator/`
+- **デプロイ方式**: ECRからDockerイメージをプル
+
 ## ✅ 最新アップデート (2025-08-27)
 
 **🔧 重要修正**: 空文字列データの処理を修正 - 「発話なし(0点)」として正しく処理するように改善
@@ -307,7 +317,345 @@ python3 check_result.py
 - **ReDoc**: `http://localhost:8009/redoc`
 - **ヘルスチェック**: `http://localhost:8009/health`
 
-## 🚀 本番環境デプロイ（EC2）
+## 🚢 本番環境デプロイ（ECR + EC2）【2025年9月3日更新】
+
+本番環境は**ECRベースのデプロイ**に移行しました。以下の手順でデプロイを実行してください。
+
+### 前提条件
+1. **watchme-networkインフラストラクチャが起動済み**
+2. **環境変数ファイル（.env）が配置済み**
+   - `/home/ubuntu/watchme-api-vibe-aggregator/.env`
+3. **AWS CLIが設定済み**
+
+### デプロイ手順
+
+#### 1. ローカルからECRへのデプロイ
+
+```bash
+# プロジェクトディレクトリに移動
+cd /Users/kaya.matsumoto/api_gen-prompt_mood-chart_v1
+
+# ECRへイメージをビルド＆プッシュ
+./deploy-ecr.sh
+```
+
+#### 2. EC2サーバーでのデプロイ
+
+##### 方法1: run-prod.shを使用（推奨）
+```bash
+# EC2サーバーにSSH接続
+ssh -i ~/watchme-key.pem ubuntu@3.24.16.82
+
+# デプロイスクリプトを実行
+cd /home/ubuntu/watchme-api-vibe-aggregator
+./run-prod.sh
+```
+
+##### 方法2: 手動でdocker-composeを使用
+```bash
+# ECRから最新イメージをプル
+aws ecr get-login-password --region ap-southeast-2 | \
+  docker login --username AWS --password-stdin \
+  754724220380.dkr.ecr.ap-southeast-2.amazonaws.com
+
+docker pull 754724220380.dkr.ecr.ap-southeast-2.amazonaws.com/watchme-api-vibe-aggregator:latest
+
+# コンテナを再起動
+docker-compose -f docker-compose.prod.yml down
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+### 初回セットアップ（新規環境の場合）
+
+```bash
+# 1. EC2にディレクトリ作成
+ssh -i ~/watchme-key.pem ubuntu@3.24.16.82 'mkdir -p /home/ubuntu/watchme-api-vibe-aggregator'
+
+# 2. 必要なファイルをコピー
+scp -i ~/watchme-key.pem docker-compose.prod.yml ubuntu@3.24.16.82:/home/ubuntu/watchme-api-vibe-aggregator/
+scp -i ~/watchme-key.pem run-prod.sh ubuntu@3.24.16.82:/home/ubuntu/watchme-api-vibe-aggregator/
+
+# 3. .envファイルを作成
+ssh -i ~/watchme-key.pem ubuntu@3.24.16.82
+cat > /home/ubuntu/watchme-api-vibe-aggregator/.env << EOF
+SUPABASE_URL=your-supabase-url
+SUPABASE_KEY=your-supabase-key
+EC2_BASE_URL=production
+EOF
+
+# 4. デプロイ実行
+cd /home/ubuntu/watchme-api-vibe-aggregator
+./run-prod.sh
+```
+
+### 動作確認
+
+```bash
+# ヘルスチェック（内部）
+curl http://localhost:8009/health
+
+# ヘルスチェック（外部）
+curl https://api.hey-watch.me/vibe-aggregator/health
+
+# コンテナ状態確認
+docker ps | grep api_gen_prompt_mood_chart
+
+# ログ確認
+docker logs -f api_gen_prompt_mood_chart
+```
+
+### デプロイ成功確認（2025年9月3日）
+
+```bash
+# コンテナイメージ確認
+$ docker inspect api_gen_prompt_mood_chart --format "{{.Config.Image}}"
+754724220380.dkr.ecr.ap-southeast-2.amazonaws.com/watchme-api-vibe-aggregator:latest
+
+# 外部アクセス確認
+$ curl https://api.hey-watch.me/vibe-aggregator/health
+{"status":"healthy","timestamp":"2025-09-03T12:48:06.409480"}
+```
+
+✅ **ECRベースのデプロイが正常に稼働しています**
+
+---
+
+## 🚀 CI/CD パイプライン（GitHub Actions）【2025年9月3日追加】
+
+GitHub Actionsによる自動デプロイパイプラインを導入しました。コード変更からECRへのイメージプッシュまでを完全自動化し、デプロイ作業を大幅に効率化します。
+
+### 📋 CI/CD導入の概要
+
+#### なぜCI/CDが必要か？
+
+**従来の手動デプロイの問題点:**
+- ローカルでDockerビルド → ECRプッシュの手作業が必要
+- ビルド環境の違いによる不整合リスク
+- 人的ミスの可能性
+- デプロイ履歴が不明確
+
+**CI/CD導入のメリット:**
+- ✅ **自動化**: mainブランチへのpush時に自動でECRへデプロイ
+- ✅ **一貫性**: 同一環境（GitHub Actions）でビルド
+- ✅ **透明性**: 全デプロイ履歴がGitHub Actionsに記録
+- ✅ **安全性**: シークレット管理でAWS認証情報を保護
+
+### 🔧 CI/CDの仕組み
+
+#### アーキテクチャ図
+
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────┐      ┌──────────┐
+│  Developer  │ push │    GitHub    │ auto │ GitHub  │ push │   AWS    │
+│   (Local)   │ ───> │ Repository   │ ───> │ Actions │ ───> │   ECR    │
+└─────────────┘      └──────────────┘      └─────────┘      └──────────┘
+                                                 ↓
+                                         ┌──────────────┐
+                                         │ Build Docker │
+                                         │    Image     │
+                                         └──────────────┘
+
+                     ┌──────────────────────────────────────┐
+                     │        手動デプロイ（現時点）         │
+                     │  EC2サーバーでrun-prod.sh実行        │
+                     └──────────────────────────────────────┘
+```
+
+### 🚦 CI/CDワークフローの詳細
+
+#### トリガー条件
+- **自動実行**: mainブランチへのpush時
+- **手動実行**: GitHub ActionsのUIから「Run workflow」
+
+#### 実行ステップ
+
+1. **コードのチェックアウト**
+   - リポジトリの最新コードを取得
+
+2. **AWS認証設定**
+   - GitHub SecretsからAWS認証情報を取得
+   - 一時的なセッションを確立
+
+3. **ECRログイン**
+   - AWS ECRへの認証を実行
+   - Dockerクライアントを設定
+
+4. **イメージビルド＆プッシュ**
+   - `Dockerfile.prod`を使用してビルド
+   - 2つのタグでプッシュ:
+     - `latest`: 最新版として
+     - `git-sha`: コミットハッシュ（履歴管理用）
+
+5. **通知**
+   - 成功/失敗をログに記録
+   - 次のステップの案内を表示
+
+### 🔐 セキュリティ設定
+
+#### GitHub Secrets（必須設定）
+
+リポジトリの **Settings > Secrets and variables > Actions** で設定:
+
+| シークレット名 | 説明 | 使用場所 |
+|--------------|------|---------|
+| `AWS_ACCESS_KEY_ID` | AWS IAMユーザーのアクセスキーID | GitHub Actions実行時のみ |
+| `AWS_SECRET_ACCESS_KEY` | AWS IAMユーザーのシークレットキー | GitHub Actions実行時のみ |
+
+**重要**: これらのシークレットは暗号化され、GitHub Actions実行時のみアクセス可能
+
+#### IAM権限要件
+
+CI/CD用のIAMユーザーに必要な最小権限:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": [
+        "arn:aws:ecr:ap-southeast-2:754724220380:repository/watchme-api-vibe-aggregator"
+      ]
+    }
+  ]
+}
+```
+
+### 📝 詳細な使用手順
+
+#### 初回セットアップ（一度だけ）
+
+1. **GitHub Secretsの設定**
+   ```
+   1. https://github.com/[your-username]/api_gen-prompt_mood-chart_v1 を開く
+   2. Settings → Secrets and variables → Actions
+   3. "New repository secret"をクリック
+   4. AWS_ACCESS_KEY_ID を追加
+   5. AWS_SECRET_ACCESS_KEY を追加
+   ```
+
+2. **動作確認**
+   ```bash
+   # テスト用の小さな変更
+   echo "# CI/CD test" >> README.md
+   git add README.md
+   git commit -m "test: CI/CD pipeline"
+   git push origin main
+   
+   # GitHub Actionsタブで実行状況を確認
+   ```
+
+#### 通常のデプロイフロー
+
+```bash
+# 1. 開発作業
+code main.py  # コード修正
+
+# 2. コミット＆プッシュ（CI/CDトリガー）
+git add .
+git commit -m "feat: 新機能追加"
+git push origin main
+
+# 3. GitHub Actionsの確認（ブラウザ）
+# https://github.com/[your-username]/api_gen-prompt_mood-chart_v1/actions
+
+# 4. EC2で本番デプロイ（手動）
+ssh -i ~/watchme-key.pem ubuntu@3.24.16.82
+cd /home/ubuntu/watchme-api-vibe-aggregator
+./run-prod.sh
+```
+
+### 🎯 CI/CDパイプラインの範囲【2025年9月3日 CD追加】
+
+#### 完全自動化された部分 ✅
+- コード変更の検知（mainブランチへのpush）
+- Dockerイメージのビルド
+- ECRへのイメージプッシュ
+- **EC2への自動デプロイ** ← NEW!
+- ヘルスチェック確認
+- デプロイ履歴の記録
+
+#### CD（継続的デプロイ）の追加設定
+
+**追加で必要なGitHub Secrets:**
+
+| シークレット名 | 説明 | 設定値 |
+|--------------|------|--------|
+| `EC2_SSH_PRIVATE_KEY` | SSH秘密鍵 | watchme-key.pemの内容 |
+| `EC2_HOST` | EC2のIPアドレス | `3.24.16.82` |
+| `EC2_USER` | EC2ユーザー名 | `ubuntu` |
+
+詳細な設定手順: [SETUP_CD_GITHUB_SECRETS.md](./SETUP_CD_GITHUB_SECRETS.md)
+
+### 🔄 完全自動デプロイフロー
+
+```mermaid
+graph LR
+    A[git push main] --> B[GitHub Actions起動]
+    B --> C[CI: Dockerビルド]
+    C --> D[CI: ECRプッシュ]
+    D --> E[CD: EC2へSSH接続]
+    E --> F[CD: 自動デプロイ実行]
+    F --> G[CD: ヘルスチェック]
+    G --> H[完了通知]
+```
+
+**実行される処理:**
+1. mainブランチへのpush検知
+2. Dockerイメージのビルド（Dockerfile.prod使用）
+3. ECRへのプッシュ（latest + git-sha タグ）
+4. EC2へのSSH接続（GitHub Secrets経由）
+5. run-prod.shスクリプトの自動実行
+6. コンテナ起動確認とヘルスチェック
+7. 結果通知（成功/失敗）
+
+### 🔍 トラブルシューティング
+
+#### よくある問題と解決方法
+
+| エラー | 原因 | 解決方法 |
+|-------|------|---------|
+| `Invalid AWS credentials` | シークレットが未設定/誤り | GitHub Secretsを再確認 |
+| `Repository does not exist` | ECRリポジトリがない | AWSコンソールでECR確認 |
+| `no basic auth credentials` | ECRログイン失敗 | IAM権限を確認 |
+| `Dockerfile.prod not found` | ファイルが存在しない | リポジトリ構成を確認 |
+
+#### デバッグ方法
+
+1. **GitHub Actionsログの確認**
+   - Actionsタブ → 失敗したワークフロー → 詳細表示
+
+2. **ローカルでのテスト**
+   ```bash
+   # ローカルでDockerビルドをテスト
+   docker build -f Dockerfile.prod -t test-image .
+   ```
+
+3. **AWS CLIでの確認**
+   ```bash
+   # ECRリポジトリの存在確認
+   aws ecr describe-repositories --repository-names watchme-api-vibe-aggregator
+   ```
+
+### 📚 関連ファイル
+
+- **`.github/workflows/deploy-to-ecr.yml`**: CI/CDワークフロー定義
+- **`SETUP_GITHUB_SECRETS.md`**: シークレット設定の詳細ガイド
+- **`Dockerfile.prod`**: 本番用Dockerイメージ定義
+- **`deploy-ecr.sh`**: ローカル用デプロイスクリプト（CI/CDと同等の処理）
+
+---
+
+## 🚀 本番環境デプロイ（旧方式 - 参考用）
 
 ### 初回デプロイ手順
 
@@ -539,4 +887,52 @@ print(result)
 - ✅ HTTPS対応（SSL証明書あり）
 - ✅ CORS設定済み
 - ✅ 適切なヘッダー設定
-- ✅ レート制限対応（Nginxレベル） 
+- ✅ レート制限対応（Nginxレベル） ## 🚢 本番環境デプロイ
+
+### 前提条件
+1. **watchme-networkインフラストラクチャが起動済み**
+2. **環境変数ファイル（.env）が配置済み**
+3. **AWS CLIが設定済み**
+
+### ECRへのデプロイ（ローカルから）
+
+```bash
+# 1. deploy-ecr.shスクリプトを使用
+cd /Users/kaya.matsumoto/api_gen-prompt_mood-chart_v1
+./deploy-ecr.sh
+```
+
+### EC2サーバーでのデプロイ
+
+#### 方法1: run-prod.shを使用（推奨）
+```bash
+# EC2サーバー上で実行
+cd /home/ubuntu/watchme-api-vibe-aggregator
+./run-prod.sh
+```
+
+#### 方法2: 手動でdocker-composeを使用
+```bash
+# ECRから最新イメージをプル
+aws ecr get-login-password --region ap-southeast-2 | \
+  docker login --username AWS --password-stdin \
+  754724220380.dkr.ecr.ap-southeast-2.amazonaws.com
+
+docker pull 754724220380.dkr.ecr.ap-southeast-2.amazonaws.com/watchme-api-vibe-aggregator:latest
+
+# コンテナを起動
+docker-compose -f docker-compose.prod.yml down
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+### 動作確認
+```bash
+# ヘルスチェック
+curl http://localhost:8009/health
+
+# コンテナ状態確認
+docker ps | grep api_gen_prompt_mood_chart
+
+# ログ確認
+docker logs -f api_gen_prompt_mood_chart
+```
