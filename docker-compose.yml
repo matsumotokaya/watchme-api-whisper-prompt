@@ -14,9 +14,15 @@ services:
     volumes:
       - /home/ubuntu/data:/Users/kaya.matsumoto/data
     restart: unless-stopped
+    networks:
+      - watchme-network
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8009/health')"]
       interval: 30s
       timeout: 30s
       retries: 3
       start_period: 5s
+
+networks:
+  watchme-network:
+    external: true
