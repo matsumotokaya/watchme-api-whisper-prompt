@@ -2,7 +2,12 @@
 
 1日分（48個）のトランスクリプションファイルを統合し、ChatGPT分析に適したプロンプトを生成するFastAPIアプリケーション
 
-> **注意**: 本番環境では`api_gen_prompt_mood_chart`という名前でECRからDockerイメージとしてデプロイされています。
+## 🚨 重要: デプロイ方法について
+
+**このAPIは完全自動CI/CDパイプラインで管理されています。**
+- ✅ mainブランチへのpushで自動的に本番環境にデプロイ
+- ✅ 手動デプロイは不要（GitHub Actions が全て処理）
+- ⚠️ 詳細は [CI/CDパイプライン](#cicd-パイプライン) セクションを参照
 
 ## 🐳 本番環境情報
 
@@ -10,9 +15,51 @@
 - **コンテナ名**: `api_gen_prompt_mood_chart`
 - **ポート**: 8009
 - **公開URL**: `https://api.hey-watch.me/vibe-aggregator/`
-- **デプロイ方式**: ECRからDockerイメージをプル
+- **デプロイ方式**: GitHub Actions → ECR → EC2（完全自動）
 
-## ✅ 最新アップデート (2025-08-27)
+## 🚀 CI/CD パイプライン
+
+### デプロイフロー（完全自動化）
+
+```mermaid
+graph LR
+    A[git push main] --> B[GitHub Actions]
+    B --> C[ARM64 Docker Build]
+    C --> D[ECR Push]
+    D --> E[EC2 Auto Deploy]
+    E --> F[Health Check]
+```
+
+### 開発者がやること
+
+```bash
+# 1. コード修正
+code main.py
+
+# 2. コミット＆プッシュ（これだけ！）
+git add .
+git commit -m "feat: 新機能追加"
+git push origin main
+
+# 3. 自動デプロイ完了を待つ（約5分）
+# GitHub Actions: https://github.com/[your-repo]/actions
+```
+
+### CI/CD設定詳細
+
+- **ワークフローファイル**: `.github/workflows/deploy-to-ecr.yml`
+- **必要なGitHub Secrets**: 設定済み（AWS認証、EC2接続）
+- **アーキテクチャ**: ARM64対応（EC2 t4g.small）
+- 詳細: [CI/CDドキュメント](#cicd-パイプライン詳細)
+
+---
+
+## ✅ 最新アップデート (2025-09-03)
+
+**🎉 CI/CD完全自動化**: GitHub Actions による自動デプロイパイプライン実装
+**🔧 ARM64対応**: EC2 t4g.small での動作を最適化
+
+### 過去のアップデート (2025-08-27)
 
 **🔧 重要修正**: 空文字列データの処理を修正 - 「発話なし(0点)」として正しく処理するように改善
 **📈 処理改善**: 処理済みファイル数が5個→25個に大幅改善（欠損データの誤判定を修正）
@@ -317,9 +364,10 @@ python3 check_result.py
 - **ReDoc**: `http://localhost:8009/redoc`
 - **ヘルスチェック**: `http://localhost:8009/health`
 
-## 🚢 本番環境デプロイ（ECR + EC2）【2025年9月3日更新】
+## 🚢 手動デプロイ手順（CI/CDを使わない場合）
 
-本番環境は**ECRベースのデプロイ**に移行しました。以下の手順でデプロイを実行してください。
+**⚠️ 注意: 通常はCI/CDパイプラインが自動でデプロイするため、以下の手動作業は不要です。**
+緊急時やCI/CDが使用できない場合のみ参照してください。
 
 ### 前提条件
 1. **watchme-networkインフラストラクチャが起動済み**
@@ -420,9 +468,21 @@ $ curl https://api.hey-watch.me/vibe-aggregator/health
 
 ---
 
-## 🚀 CI/CD パイプライン（GitHub Actions）【2025年9月3日追加】
+## 📖 CI/CD パイプライン詳細
 
-GitHub Actionsによる自動デプロイパイプラインを導入しました。コード変更からECRへのイメージプッシュまでを完全自動化し、デプロイ作業を大幅に効率化します。
+### なぜ手動デプロイではなくCI/CDを使うべきか
+
+**手動デプロイの問題:**
+- ローカル環境の違いによるビルドエラー
+- 人的ミスのリスク
+- デプロイ履歴が不明確
+- アーキテクチャ（ARM64）の不一致
+
+**CI/CDのメリット:**
+- ✅ push するだけで自動デプロイ
+- ✅ 一貫したビルド環境
+- ✅ 全履歴がGitHub Actionsに記録
+- ✅ ARM64対応済み
 
 ### 📋 CI/CD導入の概要
 
