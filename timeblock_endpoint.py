@@ -252,24 +252,88 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     
     # SEDデータ（音響イベント）
     if sed_data:
-        # 確率の高い上位20個のイベントのみ表示
-        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)[:20]
+        prompt_parts.append("""
+【音響イベントの時系列分析（YAMNet）】
+※30分間の音響環境を分析した結果です。環境音や活動音から状況を推定してください。
+""")
         
-        events_formatted = []
-        for event in sorted_events:
-            prob = event.get('prob', 0)
-            label = event.get('label', 'Unknown')
-            # 確率をパーセンテージで表示
-            events_formatted.append(f"- {label}: {prob*100:.1f}%")
+        # 確率の高い上位イベントを抽出
+        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)
         
+        # 主要な音響イベント（70%以上）
+        high_prob_events = [e for e in sorted_events if e.get('prob', 0) >= 0.7]
+        # 中程度の音響イベント（40-70%）
+        mid_prob_events = [e for e in sorted_events if 0.4 <= e.get('prob', 0) < 0.7]
+        # 背景的な音響イベント（20-40%）
+        low_prob_events = [e for e in sorted_events if 0.2 <= e.get('prob', 0) < 0.4]
+        
+        # 時系列的な解釈を提供
+        timeline_parts = []
+        timeline_parts.append("【音響イベントのカテゴリ別分析】")
+        timeline_parts.append("")
+        
+        # 主要イベント（継続的に検出される音）
+        if high_prob_events:
+            timeline_parts.append("◆ 主要な音響特徴（70%以上の確率で検出）:")
+            for event in high_prob_events[:5]:
+                label = event.get('label', 'Unknown')
+                prob = event.get('prob', 0)
+                timeline_parts.append(f"  • {label}: {prob*100:.1f}% - 30分間を通じて顕著")
+        
+        # 中程度のイベント（断続的に検出される音）
+        if mid_prob_events:
+            timeline_parts.append("")
+            timeline_parts.append("◆ 断続的な音響特徴（40-70%の確率で検出）:")
+            for event in mid_prob_events[:10]:
+                label = event.get('label', 'Unknown')
+                prob = event.get('prob', 0)
+                timeline_parts.append(f"  • {label}: {prob*100:.1f}%")
+        
+        # 背景音
+        if low_prob_events:
+            timeline_parts.append("")
+            timeline_parts.append("◆ 背景的な音響特徴（20-40%の確率で検出）:")
+            for event in low_prob_events[:5]:
+                label = event.get('label', 'Unknown')
+                prob = event.get('prob', 0)
+                timeline_parts.append(f"  • {label}: {prob*100:.1f}%")
+        
+        prompt_parts.append("\n".join(timeline_parts))
+        
+        # 音響環境の総合的な解釈
         prompt_parts.append(f"""
-【検出された音響イベント（YAMNet）】
-※環境音や活動音の検出結果です。発話内容と時間帯から総合的に判断してください。
-{chr(10).join(events_formatted)}
+【音響環境の時系列的解釈】
+※OpenSMILEの時系列データと組み合わせて解釈してください：
+- 高確率イベント（70%以上）: 継続的または頻繁に発生している音
+- 中確率イベント（40-70%）: 断続的に発生している音
+- 低確率イベント（20-40%）: 背景音または一時的な音
+
+【重要な音響パターン】
+- Speech検出率: {next((e.get('prob', 0)*100 for e in sorted_events if 'Speech' in e.get('label', '')), 0):.1f}%
+- 子供の声の検出: {'あり' if any('Child' in e.get('label', '') or 'Baby' in e.get('label', '') for e in sorted_events[:20]) else 'なし'}
+- 環境ノイズレベル: {'高' if any('Noise' in e.get('label', '') for e in sorted_events[:10]) else '低'}
+- 活動音の多様性: {len([e for e in sorted_events[:20] if e.get('prob', 0) > 0.3])}種類
 """)
     else:
         prompt_parts.append("""【音響イベント（YAMNet）】
 データなし
+""")
+    
+    # 統合的な時系列解釈セクション
+    if opensmile_data and sed_data:
+        prompt_parts.append("""
+【マルチモーダル時系列統合分析】
+※OpenSMILEの1秒毎の変化とYAMNetの音響イベントを組み合わせた解釈：
+
+1. OpenSMILEデータから時間帯別の活動レベルを推定
+2. YAMNetの音響イベントから環境や活動内容を推定
+3. 両データの相関から感情状態の変化を推定
+
+例：
+- 音量大＋Speech高検出 → 活発な会話
+- 音量小＋無音多＋Silence検出 → 静かな活動または休息
+- 声の震え大＋Crying検出 → 感情的な状態
+- 音量変動大＋多様な音響イベント → 活動的な遊び
 """)
     
     # 分析指示（時系列分析を重視）
