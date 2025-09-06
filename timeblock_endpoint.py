@@ -12,6 +12,84 @@ from typing import Optional, Dict, Any, List
 import json
 import traceback
 
+
+def get_season(month: int) -> str:
+    """月から季節を判定（日本の季節）"""
+    if month in [3, 4, 5]:
+        return "春"
+    elif month in [6, 7, 8]:
+        return "夏"
+    elif month in [9, 10, 11]:
+        return "秋"
+    else:
+        return "冬"
+
+
+def generate_age_context(subject_info: Optional[Dict]) -> str:
+    """観測対象者情報から年齢に応じたコンテキストを動的生成"""
+    if not subject_info:
+        return "観測対象者の詳細情報なし。発話内容と音響特徴から総合的に判断してください。"
+    
+    age = subject_info.get('age')
+    gender = subject_info.get('gender', '不明')
+    notes = subject_info.get('notes', '')
+    
+    context_parts = []
+    
+    # 年齢別の一般的傾向（決めつけない）
+    if age is not None:
+        if age <= 3:
+            context_parts.append(f"{age}歳{gender}：言語発達初期。単語や二語文が中心。泣き声や感情表現が主なコミュニケーション手段。")
+        elif age <= 6:
+            context_parts.append(f"{age}歳{gender}：幼児期。ごっこ遊び・独り言・想像遊びは正常な発達。感情表現が豊か。")
+        elif age <= 12:
+            context_parts.append(f"{age}歳{gender}：学童期。学校生活・友人関係・習い事などが生活の中心。遊びと学習が混在。")
+        elif age <= 18:
+            context_parts.append(f"{age}歳{gender}：思春期。進路・友人関係・アイデンティティ形成期。感情の起伏あり。")
+        elif age <= 25:
+            context_parts.append(f"{age}歳{gender}：若年成人期。仕事・恋愛・自立の課題。ストレスと成長の時期。")
+        elif age <= 60:
+            context_parts.append(f"{age}歳{gender}：成人期。仕事・家庭・社会的責任。多様なストレス要因あり。")
+        else:
+            context_parts.append(f"{age}歳{gender}：高齢期。健康・家族・生きがいが主要テーマ。経験に基づく安定した判断。")
+    else:
+        context_parts.append(f"年齢不明の{gender}")
+    
+    # notesがあれば追加
+    if notes:
+        context_parts.append(f"追加情報：{notes}")
+    
+    return " ".join(context_parts)
+
+
+def generate_time_context(hour: int, minute: int) -> str:
+    """時間帯から一般的な活動の可能性を提示（決めつけない）"""
+    contexts = []
+    time_str = f"{hour:02d}:{minute:02d}"
+    
+    if 5 <= hour < 7:
+        contexts.append(f"{time_str}（早朝：起床・朝の準備の可能性）")
+    elif 7 <= hour < 9:
+        contexts.append(f"{time_str}（朝：朝食・登校/出勤準備の可能性）")
+    elif 9 <= hour < 12:
+        contexts.append(f"{time_str}（午前：活動時間・仕事/学習の可能性）")
+    elif 12 <= hour < 14:
+        contexts.append(f"{time_str}（昼：昼食・休憩時間の可能性）")
+    elif 14 <= hour < 17:
+        contexts.append(f"{time_str}（午後：活動時間・おやつ時間の可能性）")
+    elif 17 <= hour < 19:
+        contexts.append(f"{time_str}（夕方：帰宅・夕食準備の可能性）")
+    elif 19 <= hour < 21:
+        contexts.append(f"{time_str}（夜：夕食・家族団らん・入浴の可能性）")
+    elif 21 <= hour < 23:
+        contexts.append(f"{time_str}（夜遅く：就寝準備・自由時間の可能性）")
+    elif 23 <= hour or hour < 5:
+        contexts.append(f"{time_str}（深夜：就寝時間の可能性が高い）")
+    else:
+        contexts.append(time_str)
+    
+    return contexts[0] if contexts else time_str
+
 async def get_whisper_data(supabase_client, device_id: str, date: str, time_block: str) -> Optional[str]:
     """
     vibe_whisperテーブルから特定のタイムブロックのトランスクリプトを取得
@@ -197,7 +275,28 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 - vibe_scoreは必ず-100〜+100の整数値
 - confidence_scoreは0.0〜1.0の小数値
 
-    # ==================== 3. 採点・スコア分布ポリシー ====================
+    # ==================== 3. 分析の前提条件と制約（最重要） ====================
+    
+**観測対象者のプロファイリング:**
+{generate_age_context(subject_info)}
+
+**分析の優先順位（厳守）:**
+1. 第1優先: 発話内容と観測対象者の年齢・特性の照合
+2. 第2優先: 時間帯・季節との整合性確認
+3. 第3優先: 音響特徴（補完的に使用、主判断を覆すには強い根拠が必要）
+
+**誤解析防止の鉄則:**
+- 子供の演技的発話・ごっこ遊び → 年齢相応の正常な発達行動として評価
+- 独り言・自己対話 → 幼児〜学童期では正常（むしろ認知発達の証）
+- 時間帯のみでの異常判定 → 禁止（個人の生活リズムを尊重）
+- 感情の起伏 → 年齢・状況を考慮（子供は感情表現が豊か）
+
+**コンテキストを踏まえた解釈:**
+- 5歳児が怪獣ごっこで叫ぶ → ポジティブな遊び（ネガティブ判定しない）
+- 夕方の騒がしさ → 子供の活動時間として正常
+- 大人の独り言 → ストレス処理の可能性（必ずしもネガティブではない）
+
+    # ==================== 4. 採点・スコア分布ポリシー ====================
     
 **vibe_scoreの採点基準:**
 - **-100〜+100の全範囲を積極的に使用**
@@ -208,24 +307,27 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
   * ネガティブ: -60〜-20
   * 非常にネガティブ: -100〜-60
 
-**採点要素:**
-- 音量が大きい時間帯: +10〜20
-- 声の震えが多い: -10〜30
-- 長い沈黙: -5〜15
+**採点要素（観測対象者の年齢を考慮して調整）:**
+- 音量が大きい時間帯: +10〜20（子供の場合は正常範囲）
+- 声の震えが多い: -10〜30（状況と年齢による）
+- 長い沈黙: -5〜15（集中や休息の可能性も考慮）
 - 活発な会話: +15〜25
-- 早朝の活動: +20〜30
-- 深夜の活動: -20〜30
+- 早朝の活動: +20〜30（年齢により判断）
+- 深夜の活動: -20〜30（個人差を考慮）
 
 **confidence_scoreの決定基準:**
 - データの完全性（全モダリティが揃っている）: 0.8〜1.0
 - 部分的データ: 0.4〜0.8
 - 単一モダリティのみ: 0.2〜0.4
 
-    # ==================== 4. メタ情報 ====================
+    # ==================== 5. メタ情報 ====================
     
 【分析対象】
+- 地域: 日本
+- 季節: {get_season(int(date.split('-')[1])) if date else '不明'}
 - 日付: {date if date else '不明'}
-- 時間帯: {hour:02d}:{minute:02d}〜{end_hour:02d}:{end_minute:02d}（30分ブロック、{time_context}）
+- 時間帯: {generate_time_context(hour, minute)}
+- 時間範囲: {hour:02d}:{minute:02d}〜{end_hour:02d}:{end_minute:02d}（30分ブロック）
 """)
     
     # 観測対象者情報をメタ情報に含める
@@ -244,7 +346,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     else:
         prompt_parts.append("- 観測対象者: 情報なし\n")
     
-    # ==================== 5. 要約統計 ====================
+    # ==================== 6. 要約統計 ====================
     prompt_parts.append("\n【要約統計】\n")
     
     # 発話の要約
@@ -298,7 +400,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         prompt_parts.append("◆ 音響イベント（YAMNet）: データなし")
     
     
-    # ==================== 6. 詳細データ ====================
+    # ==================== 7. 詳細データ ====================
     prompt_parts.append("\n\n【詳細データ】\n")
     
     # 発話内容の詳細
