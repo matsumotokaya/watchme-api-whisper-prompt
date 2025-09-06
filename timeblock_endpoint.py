@@ -150,18 +150,21 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         time_context = "深夜"
     
     # ヘッダー
-    prompt_parts.append(f"""📊 観測対象者の行動・感情分析
+    prompt_parts.append(f"""📊 マルチモーダル時系列分析依頼
 
-30分単位で記録された60秒間の音声データから、観測対象者の様子を分析してください。
+録音デバイスによる30分間の音声データから抽出された以下の情報を総合的に分析してください：
+1. 発話内容（音声認識結果）
+2. 音響イベント（YAMNet）の時系列変化
+3. 音声特徴（OpenSMILE）の1秒毎の時系列変化
+4. 観測対象者の属性情報
 
-【記録時間】
-{date if date else ''}の{time_block.replace('-', ':')}（{time_context}）
-※30分枠内の60秒間の記録
+【分析対象時間】
+{date if date else ''}の{time_block.replace('-', ':')}〜{time_block.split('-')[0]}:{str(int(time_block.split('-')[1])+30).zfill(2) if int(time_block.split('-')[1])+30 < 60 else str(int(time_block.split('-')[0])+1).zfill(2)+':'+str((int(time_block.split('-')[1])+30)%60).zfill(2)}（{time_context}）
 
-【分析の重点】
-- 発話内容を最重視し、何をしていたか、どんな気持ちだったかを推測
-- 声の変化パターンから場の盛り上がりやテンションを判断
-- 環境音から活動内容を補完的に推測
+【分析方針】
+- 時系列データの変化パターンに注目し、感情や活動の推移を捉える
+- 複数のモダリティを相互補完的に活用する
+- 音声特徴の変化から感情の微細な変動を読み取る
 """)
     
     # 観測対象者情報
@@ -195,8 +198,8 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     # OpenSMILEデータ（音声特徴の時系列）
     if opensmile_data:
         prompt_parts.append("""
-【60秒間の声の変化パターン】
-※1秒毎の音声の変化を記録しています。変化パターンから場の盛り上がりやテンションを判断してください。
+【音声特徴の時系列変化（OpenSMILE）】
+※1秒毎の音声特徴量を示します。声の大きさ（Loudness）と声の震え（Jitter）から感情状態を推定してください。
 """)
         
         # 時系列データを表形式で表示
@@ -204,27 +207,22 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         timeline_parts.append("時刻 | 音量(Loudness) | 声の震え(Jitter) | 解釈のヒント")
         timeline_parts.append("-----|---------------|-----------------|-------------")
         
-        for i, item in enumerate(opensmile_data[:60]):  # 最大60秒分
+        for item in opensmile_data[:60]:  # 最大60秒分
             timestamp = item.get('timestamp', 'N/A')
             features = item.get('features', {})
             loudness = features.get('Loudness_sma3', 0)
             jitter = features.get('jitterLocal_sma3nz', 0)
             
-            # 解釈のヒントを追加（変化パターンを重視）
+            # 解釈のヒントを追加
             hint = ""
-            # 前の値との比較（変化を重視）
-            if i > 0:
-                prev_loudness = opensmile_data[i-1].get('features', {}).get('Loudness_sma3', 0)
-                if loudness > prev_loudness * 1.3:
-                    hint = "盛り上がり"
-                elif loudness < prev_loudness * 0.7:
-                    hint = "落ち着き"
-            
-            # Jitterは人の声の特徴として解釈
+            if loudness > 0.3:
+                hint = "大声/興奮"
+            elif loudness < 0.15:
+                hint = "小声/静か"
             if jitter > 0.01:
-                hint += " 発話あり" if hint else "発話あり"
+                hint += " 緊張/不安定" if hint else "緊張/不安定"
             elif jitter == 0:
-                hint += " 無音/環境音のみ" if not hint else "/無音"
+                hint += " 無音" if not hint else "/無音"
                 
             timeline_parts.append(f"{timestamp} | {loudness:.3f} | {jitter:.6f} | {hint}")
         
@@ -242,10 +240,10 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
             max_jitter = max(jitter_values)
             
             prompt_parts.append(f"""
-【60秒間の要約】
-- 音声の変動幅: {(max_loudness - min_loudness):.3f} （変動が大きいほど感情の起伏あり）
-- 発話があった時間: {len([j for j in jitter_values if j > 0])}秒 / {len(jitter_values)}秒
-- 無音または環境音のみ: {jitter_values.count(0)}秒
+【音声特徴の統計サマリー】
+- 平均音量: {avg_loudness:.3f} (範囲: {min_loudness:.3f}〜{max_loudness:.3f})
+- 平均声の震え: {avg_jitter:.6f} (最大: {max_jitter:.6f})
+- 無音区間: {jitter_values.count(0)}秒 / {len(jitter_values)}秒
 """)
     else:
         prompt_parts.append("""【音声特徴（OpenSMILE）】
@@ -255,55 +253,66 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     # SEDデータ（音響イベント）
     if sed_data:
         prompt_parts.append("""
-【環境音の分析（参考）】
-※60秒間の録音から検出された環境音です。発話内容の解釈を補完する参考情報として使用してください。
+【音響イベントの時系列分析（YAMNet）】
+※30分間の音響環境を分析した結果です。環境音や活動音から状況を推定してください。
 """)
         
-        # 現実的でない音をフィルタリング
-        unrealistic_keywords = ['Animal', 'Insect', 'Bird', 'Rodent', 'Mouse', 'Pig', 'Oink', 
-                                'Roar', 'Howl', 'Bark', 'Meow', 'Cricket', 'Frog', 'Mosquito']
-        
-        # フィルタリング後のイベントを抽出
-        filtered_events = []
-        for event in sed_data:
-            label = event.get('label', '')
-            if not any(keyword.lower() in label.lower() for keyword in unrealistic_keywords):
-                filtered_events.append(event)
-        
-        # 確率の高い順にソート
-        sorted_events = sorted(filtered_events, key=lambda x: x.get('prob', 0), reverse=True)
+        # 確率の高い上位イベントを抽出
+        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)
         
         # 主要な音響イベント（70%以上）
         high_prob_events = [e for e in sorted_events if e.get('prob', 0) >= 0.7]
         # 中程度の音響イベント（40-70%）
         mid_prob_events = [e for e in sorted_events if 0.4 <= e.get('prob', 0) < 0.7]
+        # 背景的な音響イベント（20-40%）
+        low_prob_events = [e for e in sorted_events if 0.2 <= e.get('prob', 0) < 0.4]
         
-        # 時系列的な解釈を提供（簡潔に）
+        # 時系列的な解釈を提供
         timeline_parts = []
-        timeline_parts.append("【検出された主な環境音】")
+        timeline_parts.append("【音響イベントのカテゴリ別分析】")
         timeline_parts.append("")
         
-        # 重要な音のみ表示（確率40%以上）
-        important_events = [e for e in sorted_events if e.get('prob', 0) >= 0.4][:10]
-        
-        if important_events:
-            for event in important_events:
+        # 主要イベント（継続的に検出される音）
+        if high_prob_events:
+            timeline_parts.append("◆ 主要な音響特徴（70%以上の確率で検出）:")
+            for event in high_prob_events[:5]:
                 label = event.get('label', 'Unknown')
                 prob = event.get('prob', 0)
-                # 確率によって重要度を表現
-                if prob >= 0.7:
-                    timeline_parts.append(f"  ◎ {label}: {prob*100:.1f}% （明確に検出）")
-                else:
-                    timeline_parts.append(f"  ○ {label}: {prob*100:.1f}%")
+                timeline_parts.append(f"  • {label}: {prob*100:.1f}% - 30分間を通じて顕著")
+        
+        # 中程度のイベント（断続的に検出される音）
+        if mid_prob_events:
+            timeline_parts.append("")
+            timeline_parts.append("◆ 断続的な音響特徴（40-70%の確率で検出）:")
+            for event in mid_prob_events[:10]:
+                label = event.get('label', 'Unknown')
+                prob = event.get('prob', 0)
+                timeline_parts.append(f"  • {label}: {prob*100:.1f}%")
+        
+        # 背景音
+        if low_prob_events:
+            timeline_parts.append("")
+            timeline_parts.append("◆ 背景的な音響特徴（20-40%の確率で検出）:")
+            for event in low_prob_events[:5]:
+                label = event.get('label', 'Unknown')
+                prob = event.get('prob', 0)
+                timeline_parts.append(f"  • {label}: {prob*100:.1f}%")
         
         prompt_parts.append("\n".join(timeline_parts))
         
         # 音響環境の総合的な解釈
         prompt_parts.append(f"""
-【環境音から分かること】
-- 人の声: {'検出あり' if any('Speech' in e.get('label', '') or 'Child' in e.get('label', '') for e in sorted_events[:10]) else '検出なし'}
-- 環境: {'騒がしい' if any('Noise' in e.get('label', '') for e in sorted_events[:10]) else '静か'}
-- 活動の活発さ: {'活発（多様な音）' if len([e for e in sorted_events[:10] if e.get('prob', 0) > 0.4]) > 5 else 'おとなしい'}
+【音響環境の時系列的解釈】
+※OpenSMILEの時系列データと組み合わせて解釈してください：
+- 高確率イベント（70%以上）: 継続的または頻繁に発生している音
+- 中確率イベント（40-70%）: 断続的に発生している音
+- 低確率イベント（20-40%）: 背景音または一時的な音
+
+【重要な音響パターン】
+- Speech検出率: {next((e.get('prob', 0)*100 for e in sorted_events if 'Speech' in e.get('label', '')), 0):.1f}%
+- 子供の声の検出: {'あり' if any('Child' in e.get('label', '') or 'Baby' in e.get('label', '') for e in sorted_events[:20]) else 'なし'}
+- 環境ノイズレベル: {'高' if any('Noise' in e.get('label', '') for e in sorted_events[:10]) else '低'}
+- 活動音の多様性: {len([e for e in sorted_events[:20] if e.get('prob', 0) > 0.3])}種類
 """)
     else:
         prompt_parts.append("""【音響イベント（YAMNet）】
@@ -313,18 +322,18 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     # 統合的な時系列解釈セクション
     if opensmile_data and sed_data:
         prompt_parts.append("""
-【総合的な解釈のポイント】
-※発話内容を最重視し、音声の変化パターンで場の雰囲気を判断してください：
+【マルチモーダル時系列統合分析】
+※OpenSMILEの1秒毎の変化とYAMNetの音響イベントを組み合わせた解釈：
 
-1. 発話内容から：何をしていたか、誰と話していたか
-2. 声の変化から：盛り上がっていたか、落ち着いていたか
-3. 環境音から：どんな場所で、どんな活動をしていたか
+1. OpenSMILEデータから時間帯別の活動レベルを推定
+2. YAMNetの音響イベントから環境や活動内容を推定
+3. 両データの相関から感情状態の変化を推定
 
-重要：
-- 声の大小の絶対値は気にしない（マイクとの距離の問題）
-- 声の変化パターン（大きくなった/小さくなった）に注目
-- 発話がある時間帯（Jitter > 0）に注目
-- 現実的でない音響イベントは無視
+例：
+- 音量大＋Speech高検出 → 活発な会話
+- 音量小＋無音多＋Silence検出 → 静かな活動または休息
+- 声の震え大＋Crying検出 → 感情的な状態
+- 音量変動大＋多様な音響イベント → 活動的な遊び
 """)
     
     # 分析指示（時系列分析を重視）
@@ -337,13 +346,13 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 ```json
 {{
   "time_block": "{time_block}",
-  "summary": "観測対象者が何をしていて、どんな気持ちだったか、場の雰囲気はどうだったかを2-3文で説明。技術用語は使わず、発話内容を中心に具体的に記述",
+  "summary": "30分間の全体的な状況と感情の流れを2-3文で説明",
   "vibe_score": -36,
   "confidence_score": 0.85,
   "temporal_analysis": {{
-    "emotion_trajectory": "60秒間の感情の流れ：前半は穏やか→中盤で盛り上がり→後半は落ち着く",
-    "peak_moments": ["0:06秒 - 声が大きくなった（興奮）", "0:23秒 - 活発に話している"],
-    "quiet_periods": ["0:16-0:21秒 - ほぼ無音（休息または考え中）"]
+    "emotion_trajectory": "前半は穏やか→中盤で興奮→後半は落ち着く",
+    "peak_moments": ["11:30:06 - 大声での発話（興奮）", "11:30:23 - 活発な活動"],
+    "quiet_periods": ["11:30:16-11:30:21 - ほぼ無音（集中または休息）"]
   }},
   "acoustic_features": {{
     "average_loudness": 0.186,
@@ -367,12 +376,12 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 🔍 **分析の重点**
 | 要素 | 指示内容 |
 |------|----------|
-| **summary** | 観測対象者が何をしていたか、どんな気持ちだったか、誰と何を話していたか。技術用語は使わず、発話内容を中心に具体的に記述 |
-| **vibe_score** | -100〜+100の整数値。場の盛り上がり、テンションの高低を数値化。発話内容と声の変化パターンから判断 |
-| **感情の推移** | 60秒間での感情やテンションの変化。声が大きくなった/小さくなった、盛り上がった/落ち着いたなど変化に注目 |
-| **confidence_score** | 分析の確信度。発話が明確で音声データが豊富なら高く |
-| **temporal_analysis** | 60秒間の中での変化を記述。「前半」「中盤」「後半」で何が起きたか |
-| **key_observations** | 発話内容から分かる具体的な行動や感情を記載 |
+| **vibe_score** | -100〜+100の整数値。時系列データ全体の傾向を反映。瞬間的なピークよりも全体的な流れを重視 |
+| **時系列分析** | 音声特徴の変化パターンから感情の推移を読み取る。急激な変化に注目 |
+| **マルチモーダル統合** | 発話内容 × 音声特徴 × 環境音を総合的に解釈 |
+| **confidence_score** | データの質と量、各モダリティの一致度を考慮。時系列データが豊富なら高く |
+| **temporal_analysis** | 必ず時間軸での変化を記述。「前半」「中盤」「後半」や具体的な時刻を使用 |
+| **acoustic_features** | OpenSMILEデータの統計値と変化傾向を必ず含める |
 
 📊 **スコアリング指示**
 - **-100〜+100の全範囲を積極的に使用してください**
