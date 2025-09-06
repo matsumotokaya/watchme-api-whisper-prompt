@@ -133,6 +133,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     
     # 時間情報から時間帯を判定
     hour = int(time_block.split('-')[0])
+    minute = int(time_block.split('-')[1])
     time_context = ""
     if 5 <= hour < 9:
         time_context = "早朝"
@@ -149,200 +150,21 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     else:
         time_context = "深夜"
     
-    # ヘッダー
-    prompt_parts.append(f"""📊 マルチモーダル時系列分析依頼
-
-録音デバイスによる30分間の音声データから抽出された以下の情報を総合的に分析してください：
-1. 発話内容（音声認識結果）
-2. 音響イベント（YAMNet）の時系列変化
-3. 音声特徴（OpenSMILE）の1秒毎の時系列変化
-4. 観測対象者の属性情報
-
-【分析対象時間】
-{date if date else ''}の{time_block.replace('-', ':')}〜{time_block.split('-')[0]}:{str(int(time_block.split('-')[1])+30).zfill(2) if int(time_block.split('-')[1])+30 < 60 else str(int(time_block.split('-')[0])+1).zfill(2)+':'+str((int(time_block.split('-')[1])+30)%60).zfill(2)}（{time_context}）
-
-【分析方針】
-- 時系列データの変化パターンに注目し、感情や活動の推移を捉える
-- 複数のモダリティを相互補完的に活用する
-- 音声特徴の変化から感情の微細な変動を読み取る
-""")
+    # 終了時刻の計算（30分後）
+    end_minute = minute + 30
+    end_hour = hour
+    if end_minute >= 60:
+        end_hour = hour + 1
+        end_minute = end_minute - 60
     
-    # 観測対象者情報
-    if subject_info:
-        subject_parts = []
-        subject_parts.append("【観測対象者情報】")
-        if subject_info.get('name'):
-            subject_parts.append(f"- 名前: {subject_info['name']}")
-        if subject_info.get('age') is not None:
-            subject_parts.append(f"- 年齢: {subject_info['age']}歳")
-        if subject_info.get('gender'):
-            subject_parts.append(f"- 性別: {subject_info['gender']}")
-        if subject_info.get('notes'):
-            subject_parts.append(f"- 備考: {subject_info['notes']}")
-        
-        prompt_parts.append("\n".join(subject_parts) + "\n")
-    else:
-        prompt_parts.append("【観測対象者情報】\n情報なし\n")
-    
-    # トランスクリプション
-    if transcription and transcription.strip():
-        prompt_parts.append(f"""
-【発話内容】
-{transcription}
-""")
-    else:
-        prompt_parts.append("""【発話内容】
-(発話なし) - 録音はされたが言語的な情報なし
-""")
-    
-    # OpenSMILEデータ（音声特徴の時系列）
-    if opensmile_data:
-        prompt_parts.append("""
-【音声特徴の時系列変化（OpenSMILE）】
-※1秒毎の音声特徴量を示します。声の大きさ（Loudness）と声の震え（Jitter）から感情状態を推定してください。
-""")
-        
-        # 時系列データを表形式で表示
-        timeline_parts = []
-        timeline_parts.append("時刻 | 音量(Loudness) | 声の震え(Jitter) | 解釈のヒント")
-        timeline_parts.append("-----|---------------|-----------------|-------------")
-        
-        for item in opensmile_data[:60]:  # 最大60秒分
-            timestamp = item.get('timestamp', 'N/A')
-            features = item.get('features', {})
-            loudness = features.get('Loudness_sma3', 0)
-            jitter = features.get('jitterLocal_sma3nz', 0)
-            
-            # 解釈のヒントを追加
-            hint = ""
-            if loudness > 0.3:
-                hint = "大声/興奮"
-            elif loudness < 0.15:
-                hint = "小声/静か"
-            if jitter > 0.01:
-                hint += " 緊張/不安定" if hint else "緊張/不安定"
-            elif jitter == 0:
-                hint += " 無音" if not hint else "/無音"
-                
-            timeline_parts.append(f"{timestamp} | {loudness:.3f} | {jitter:.6f} | {hint}")
-        
-        prompt_parts.append("\n".join(timeline_parts))
-        
-        # 統計情報
-        if len(opensmile_data) > 0:
-            loudness_values = [item.get('features', {}).get('Loudness_sma3', 0) for item in opensmile_data]
-            jitter_values = [item.get('features', {}).get('jitterLocal_sma3nz', 0) for item in opensmile_data]
-            
-            avg_loudness = sum(loudness_values) / len(loudness_values)
-            max_loudness = max(loudness_values)
-            min_loudness = min(loudness_values)
-            avg_jitter = sum(jitter_values) / len(jitter_values)
-            max_jitter = max(jitter_values)
-            
-            prompt_parts.append(f"""
-【音声特徴の統計サマリー】
-- 平均音量: {avg_loudness:.3f} (範囲: {min_loudness:.3f}〜{max_loudness:.3f})
-- 平均声の震え: {avg_jitter:.6f} (最大: {max_jitter:.6f})
-- 無音区間: {jitter_values.count(0)}秒 / {len(jitter_values)}秒
-""")
-    else:
-        prompt_parts.append("""【音声特徴（OpenSMILE）】
-データなし
-""")
-    
-    # SEDデータ（音響イベント）
-    if sed_data:
-        prompt_parts.append("""
-【音響イベントの時系列分析（YAMNet）】
-※30分間の音響環境を分析した結果です。環境音や活動音から状況を推定してください。
-""")
-        
-        # 確率の高い上位イベントを抽出
-        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)
-        
-        # 主要な音響イベント（70%以上）
-        high_prob_events = [e for e in sorted_events if e.get('prob', 0) >= 0.7]
-        # 中程度の音響イベント（40-70%）
-        mid_prob_events = [e for e in sorted_events if 0.4 <= e.get('prob', 0) < 0.7]
-        # 背景的な音響イベント（20-40%）
-        low_prob_events = [e for e in sorted_events if 0.2 <= e.get('prob', 0) < 0.4]
-        
-        # 時系列的な解釈を提供
-        timeline_parts = []
-        timeline_parts.append("【音響イベントのカテゴリ別分析】")
-        timeline_parts.append("")
-        
-        # 主要イベント（継続的に検出される音）
-        if high_prob_events:
-            timeline_parts.append("◆ 主要な音響特徴（70%以上の確率で検出）:")
-            for event in high_prob_events[:5]:
-                label = event.get('label', 'Unknown')
-                prob = event.get('prob', 0)
-                timeline_parts.append(f"  • {label}: {prob*100:.1f}% - 30分間を通じて顕著")
-        
-        # 中程度のイベント（断続的に検出される音）
-        if mid_prob_events:
-            timeline_parts.append("")
-            timeline_parts.append("◆ 断続的な音響特徴（40-70%の確率で検出）:")
-            for event in mid_prob_events[:10]:
-                label = event.get('label', 'Unknown')
-                prob = event.get('prob', 0)
-                timeline_parts.append(f"  • {label}: {prob*100:.1f}%")
-        
-        # 背景音
-        if low_prob_events:
-            timeline_parts.append("")
-            timeline_parts.append("◆ 背景的な音響特徴（20-40%の確率で検出）:")
-            for event in low_prob_events[:5]:
-                label = event.get('label', 'Unknown')
-                prob = event.get('prob', 0)
-                timeline_parts.append(f"  • {label}: {prob*100:.1f}%")
-        
-        prompt_parts.append("\n".join(timeline_parts))
-        
-        # 音響環境の総合的な解釈
-        prompt_parts.append(f"""
-【音響環境の時系列的解釈】
-※OpenSMILEの時系列データと組み合わせて解釈してください：
-- 高確率イベント（70%以上）: 継続的または頻繁に発生している音
-- 中確率イベント（40-70%）: 断続的に発生している音
-- 低確率イベント（20-40%）: 背景音または一時的な音
+    # ==================== 1. ヘッダー（タスク宣言） ====================
+    prompt_parts.append(f"""📊 マルチモーダル時系列分析タスク
 
-【重要な音響パターン】
-- Speech検出率: {next((e.get('prob', 0)*100 for e in sorted_events if 'Speech' in e.get('label', '')), 0):.1f}%
-- 子供の声の検出: {'あり' if any('Child' in e.get('label', '') or 'Baby' in e.get('label', '') for e in sorted_events[:20]) else 'なし'}
-- 環境ノイズレベル: {'高' if any('Noise' in e.get('label', '') for e in sorted_events[:10]) else '低'}
-- 活動音の多様性: {len([e for e in sorted_events[:20] if e.get('prob', 0) > 0.3])}種類
-""")
-    else:
-        prompt_parts.append("""【音響イベント（YAMNet）】
-データなし
-""")
+30分ブロックの音声データから感情状態を分析し、JSON形式で出力してください。
+
+    # ==================== 2. 出力スキーマと厳格ルール ====================
     
-    # 統合的な時系列解釈セクション
-    if opensmile_data and sed_data:
-        prompt_parts.append("""
-【マルチモーダル時系列統合分析】
-※OpenSMILEの1秒毎の変化とYAMNetの音響イベントを組み合わせた解釈：
-
-1. OpenSMILEデータから時間帯別の活動レベルを推定
-2. YAMNetの音響イベントから環境や活動内容を推定
-3. 両データの相関から感情状態の変化を推定
-
-例：
-- 音量大＋Speech高検出 → 活発な会話
-- 音量小＋無音多＋Silence検出 → 静かな活動または休息
-- 声の震え大＋Crying検出 → 感情的な状態
-- 音量変動大＋多様な音響イベント → 活動的な遊び
-""")
-    
-    # 分析指示（時系列分析を重視）
-    prompt_parts.append(f"""
-✅ 総合分析と出力形式
-
-以下のJSON形式で、時系列変化を踏まえた分析結果を返してください。
-
-**出力例:**
+**出力形式（必須）:**
 ```json
 {{
   "time_block": "{time_block}",
@@ -351,56 +173,163 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
   "confidence_score": 0.85,
   "temporal_analysis": {{
     "emotion_trajectory": "前半は穏やか→中盤で興奮→後半は落ち着く",
-    "peak_moments": ["11:30:06 - 大声での発話（興奮）", "11:30:23 - 活発な活動"],
-    "quiet_periods": ["11:30:16-11:30:21 - ほぼ無音（集中または休息）"]
+    "peak_moments": ["特定時刻の感情ピーク説明"],
+    "quiet_periods": ["静寂期間の説明"]
   }},
   "acoustic_features": {{
     "average_loudness": 0.186,
     "loudness_trend": "increasing/stable/decreasing",
     "voice_stability": "安定/やや不安定/不安定",
-    "notable_patterns": ["声の震えが増加（緊張の兆候）"]
+    "notable_patterns": ["観察された音声パターン"]
   }},
   "key_observations": [
-    "時系列データから観察された重要な点1",
-    "発話と音響特徴の相関から判明した点2"
+    "時系列データから観察された重要な点"
   ],
-  "detected_mood": "neutral/positive/negative/anxious/relaxed/excited/tired等",
-  "detected_activities": [
-    "推定される主な活動",
-    "副次的な活動"
-  ],
-  "context_notes": "時間帯、音声特徴の変化パターン、環境音から推測される詳細な状況"
+  "detected_mood": "neutral/positive/negative/anxious/relaxed/excited/tired",
+  "detected_activities": ["推定される活動"],
+  "context_notes": "詳細な状況説明"
 }}
 ```
 
-🔍 **分析の重点**
-| 要素 | 指示内容 |
-|------|----------|
-| **vibe_score** | -100〜+100の整数値。時系列データ全体の傾向を反映。瞬間的なピークよりも全体的な流れを重視 |
-| **時系列分析** | 音声特徴の変化パターンから感情の推移を読み取る。急激な変化に注目 |
-| **マルチモーダル統合** | 発話内容 × 音声特徴 × 環境音を総合的に解釈 |
-| **confidence_score** | データの質と量、各モダリティの一致度を考慮。時系列データが豊富なら高く |
-| **temporal_analysis** | 必ず時間軸での変化を記述。「前半」「中盤」「後半」や具体的な時刻を使用 |
-| **acoustic_features** | OpenSMILEデータの統計値と変化傾向を必ず含める |
+**厳格ルール:**
+- JSONのみを返す（説明や補足は一切不要）
+- すべてのフィールドは必須
+- vibe_scoreは必ず-100〜+100の整数値
+- confidence_scoreは0.0〜1.0の小数値
 
-📊 **スコアリング指示**
-- **-100〜+100の全範囲を積極的に使用してください**
-- スコア分布の目安：
+    # ==================== 3. 採点・スコア分布ポリシー ====================
+    
+**vibe_scoreの採点基準:**
+- **-100〜+100の全範囲を積極的に使用**
+- スコア分布：
   * 非常にポジティブ: 60〜100
-  * ポジティブ: 20〜60  
+  * ポジティブ: 20〜60
   * ニュートラル: -20〜20
   * ネガティブ: -60〜-20
   * 非常にネガティブ: -100〜-60
-- 以下の要素で加点/減点：
-  * 音量が大きい時間帯: +10〜20
-  * 声の震えが多い: -10〜30
-  * 長い沈黙: -5〜15
-  * 活発な会話: +15〜25
-  * 早朝の活動: +20〜30
-  * 深夜の活動: -20〜30（内容による）
 
-**JSONのみを返してください。説明や補足は一切不要です。**
+**採点要素:**
+- 音量が大きい時間帯: +10〜20
+- 声の震えが多い: -10〜30
+- 長い沈黙: -5〜15
+- 活発な会話: +15〜25
+- 早朝の活動: +20〜30
+- 深夜の活動: -20〜30
+
+**confidence_scoreの決定基準:**
+- データの完全性（全モダリティが揃っている）: 0.8〜1.0
+- 部分的データ: 0.4〜0.8
+- 単一モダリティのみ: 0.2〜0.4
+
+    # ==================== 4. メタ情報 ====================
+    
+【分析対象】
+- 日付: {date if date else '不明'}
+- 時間帯: {hour:02d}:{minute:02d}〜{end_hour:02d}:{end_minute:02d}（30分ブロック、{time_context}）
 """)
+    
+    # 観測対象者情報をメタ情報に含める
+    if subject_info:
+        subject_parts = []
+        if subject_info.get('name'):
+            subject_parts.append(f"名前: {subject_info['name']}")
+        if subject_info.get('age') is not None:
+            subject_parts.append(f"年齢: {subject_info['age']}歳")
+        if subject_info.get('gender'):
+            subject_parts.append(f"性別: {subject_info['gender']}")
+        if subject_info.get('notes'):
+            subject_parts.append(f"備考: {subject_info['notes']}")
+        
+        prompt_parts.append("- 観測対象者: " + ", ".join(subject_parts) + "\n")
+    else:
+        prompt_parts.append("- 観測対象者: 情報なし\n")
+    
+    # ==================== 5. 要約統計 ====================
+    prompt_parts.append("\n【要約統計】\n")
+    
+    # 発話の要約
+    if transcription and transcription.strip():
+        prompt_parts.append(f"◆ 発話: あり（{len(transcription)}文字）")
+    else:
+        prompt_parts.append("◆ 発話: なし（録音はされたが言語的な情報なし）")
+    
+    # OpenSMILEの統計情報を先に計算
+    if opensmile_data and len(opensmile_data) > 0:
+        loudness_values = [item.get('features', {}).get('Loudness_sma3', 0) for item in opensmile_data]
+        jitter_values = [item.get('features', {}).get('jitterLocal_sma3nz', 0) for item in opensmile_data]
+        
+        avg_loudness = sum(loudness_values) / len(loudness_values)
+        max_loudness = max(loudness_values)
+        min_loudness = min(loudness_values)
+        avg_jitter = sum(jitter_values) / len(jitter_values)
+        max_jitter = max(jitter_values)
+        
+        prompt_parts.append(f"""◆ 音声特徴（OpenSMILE）統計:
+  - 記録時間: {len(opensmile_data)}秒
+  - 平均音量: {avg_loudness:.3f} (範囲: {min_loudness:.3f}〜{max_loudness:.3f})
+  - 平均声の震え: {avg_jitter:.6f} (最大: {max_jitter:.6f})
+  - 無音区間: {jitter_values.count(0)}秒 / {len(jitter_values)}秒""")
+    else:
+        prompt_parts.append("◆ 音声特徴（OpenSMILE）: データなし")
+    
+    # SEDデータ（音響イベント）の統計
+    if sed_data:
+        # 確率の高い上位イベントを抽出
+        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)
+        
+        # 主要な音響イベントの統計
+        high_prob_events = [e for e in sorted_events if e.get('prob', 0) >= 0.7]
+        mid_prob_events = [e for e in sorted_events if 0.4 <= e.get('prob', 0) < 0.7]
+        
+        speech_prob = next((e.get('prob', 0)*100 for e in sorted_events if 'Speech' in e.get('label', '')), 0)
+        has_child_voice = any('Child' in e.get('label', '') or 'Baby' in e.get('label', '') for e in sorted_events[:20])
+        has_noise = any('Noise' in e.get('label', '') for e in sorted_events[:10])
+        activity_diversity = len([e for e in sorted_events[:20] if e.get('prob', 0) > 0.3])
+        
+        prompt_parts.append(f"""◆ 音響イベント（YAMNet）統計:
+  - 検出イベント総数: {len(sed_data)}種類
+  - 高確率イベント（70%以上）: {len(high_prob_events)}個
+  - 中確率イベント（40-70%）: {len(mid_prob_events)}個
+  - Speech検出率: {speech_prob:.1f}%
+  - 子供の声: {'検出' if has_child_voice else '未検出'}
+  - 環境ノイズ: {'高' if has_noise else '低'}
+  - 活動音の多様性: {activity_diversity}種類""")
+    else:
+        prompt_parts.append("◆ 音響イベント（YAMNet）: データなし")
+    
+    
+    # ==================== 6. 詳細データ ====================
+    prompt_parts.append("\n\n【詳細データ】\n")
+    
+    # 発話内容の詳細
+    if transcription and transcription.strip():
+        prompt_parts.append(f"""◆ 発話内容（全文）:
+{transcription}
+""")
+    
+    # OpenSMILEの時系列データ（詳細）
+    if opensmile_data and len(opensmile_data) > 0:
+        prompt_parts.append("◆ 音声特徴の時系列（OpenSMILE、1秒毎）:")
+        prompt_parts.append("時刻 | 音量(Loudness) | 声の震え(Jitter)")
+        prompt_parts.append("-----|---------------|----------------")
+        
+        for item in opensmile_data[:60]:  # 最大60秒分
+            timestamp = item.get('timestamp', 'N/A')
+            features = item.get('features', {})
+            loudness = features.get('Loudness_sma3', 0)
+            jitter = features.get('jitterLocal_sma3nz', 0)
+            prompt_parts.append(f"{timestamp} | {loudness:.3f} | {jitter:.6f}")
+    
+    # SEDイベントの詳細リスト
+    if sed_data:
+        sorted_events = sorted(sed_data, key=lambda x: x.get('prob', 0), reverse=True)
+        prompt_parts.append("\n◆ 音響イベント詳細（YAMNet、確率順）:")
+        
+        # 上位20個のイベントのみ表示
+        for i, event in enumerate(sorted_events[:20], 1):
+            label = event.get('label', 'Unknown')
+            prob = event.get('prob', 0)
+            prompt_parts.append(f"  {i}. {label}: {prob*100:.1f}%")
     
     return "\n".join(prompt_parts)
 
