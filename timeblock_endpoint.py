@@ -93,12 +93,41 @@ async def get_sed_data(supabase_client, device_id: str, date: str, time_block: s
         return None
 
 
+async def get_opensmile_data(supabase_client, device_id: str, date: str, time_block: str) -> Optional[list]:
+    """
+    emotion_opensmileテーブルから特定のタイムブロックのOpenSMILEデータを取得
+    selected_features_timelineカラムから音声特徴の時系列データを取得
+    """
+    try:
+        result = supabase_client.table('emotion_opensmile').select('selected_features_timeline').eq(
+            'device_id', device_id
+        ).eq(
+            'date', date
+        ).eq(
+            'time_block', time_block
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            # selected_features_timelineは既にJSONとしてパースされているはず
+            timeline = result.data[0].get('selected_features_timeline', [])
+            # JSON文字列の場合はパース
+            if isinstance(timeline, str):
+                import json
+                timeline = json.loads(timeline)
+            return timeline
+        return None
+    except Exception as e:
+        print(f"Error fetching OpenSMILE data from emotion_opensmile: {e}")
+        return None
+
+
 
 def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[list], time_block: str, 
-                              date: str = None, subject_info: Optional[Dict] = None) -> str:
+                              date: str = None, subject_info: Optional[Dict] = None, 
+                              opensmile_data: Optional[list] = None) -> str:
     """
-    Transcription + SEDデータ + 観測対象者情報でプロンプト生成
-    英語ラベルと確率をそのまま使用し、コンテキストを重視した分析を促す
+    Transcription + SEDデータ + OpenSMILEデータ + 観測対象者情報でプロンプト生成
+    時系列データを含む包括的な分析を促す
     """
     prompt_parts = []
     
@@ -121,15 +150,21 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         time_context = "深夜"
     
     # ヘッダー
-    prompt_parts.append(f"""📝 分析依頼
-以下は録音デバイスによる1分間音声データから抽出された、発話内容と音響イベント特徴情報のマルチモーダルデータです。
-観測対象者情報と、発話内容、音響イベント、日時、日本における季節、一般的な季節のイベントなど観測対象の生活をリアルに総合的に分析し、そ心理状態と活動を推定してください。
-【日時】
-{date if date else ''}の{time_block}（{time_context}）
+    prompt_parts.append(f"""📊 マルチモーダル時系列分析依頼
 
-🚨 重要な注意事項：
-- 音響イベント検出（YAMNet）は誤検出が多いため参考程度に
-- 発話内容、時間帯、文脈を優先して判断してください
+録音デバイスによる30分間の音声データから抽出された以下の情報を総合的に分析してください：
+1. 発話内容（音声認識結果）
+2. 音響イベント（YAMNet）の時系列変化
+3. 音声特徴（OpenSMILE）の1秒毎の時系列変化
+4. 観測対象者の属性情報
+
+【分析対象時間】
+{date if date else ''}の{time_block.replace('-', ':')}〜{time_block.split('-')[0]}:{str(int(time_block.split('-')[1])+30).zfill(2) if int(time_block.split('-')[1])+30 < 60 else str(int(time_block.split('-')[0])+1).zfill(2)+':'+str((int(time_block.split('-')[1])+30)%60).zfill(2)}（{time_context}）
+
+【分析方針】
+- 時系列データの変化パターンに注目し、感情や活動の推移を捉える
+- 複数のモダリティを相互補完的に活用する
+- 音声特徴の変化から感情の微細な変動を読み取る
 """)
     
     # 観測対象者情報
@@ -160,6 +195,61 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 (発話なし) - 録音はされたが言語的な情報なし
 """)
     
+    # OpenSMILEデータ（音声特徴の時系列）
+    if opensmile_data:
+        prompt_parts.append("""
+【音声特徴の時系列変化（OpenSMILE）】
+※1秒毎の音声特徴量を示します。声の大きさ（Loudness）と声の震え（Jitter）から感情状態を推定してください。
+""")
+        
+        # 時系列データを表形式で表示
+        timeline_parts = []
+        timeline_parts.append("時刻 | 音量(Loudness) | 声の震え(Jitter) | 解釈のヒント")
+        timeline_parts.append("-----|---------------|-----------------|-------------")
+        
+        for item in opensmile_data[:60]:  # 最大60秒分
+            timestamp = item.get('timestamp', 'N/A')
+            features = item.get('features', {})
+            loudness = features.get('Loudness_sma3', 0)
+            jitter = features.get('jitterLocal_sma3nz', 0)
+            
+            # 解釈のヒントを追加
+            hint = ""
+            if loudness > 0.3:
+                hint = "大声/興奮"
+            elif loudness < 0.15:
+                hint = "小声/静か"
+            if jitter > 0.01:
+                hint += " 緊張/不安定" if hint else "緊張/不安定"
+            elif jitter == 0:
+                hint += " 無音" if not hint else "/無音"
+                
+            timeline_parts.append(f"{timestamp} | {loudness:.3f} | {jitter:.6f} | {hint}")
+        
+        prompt_parts.append("\n".join(timeline_parts))
+        
+        # 統計情報
+        if len(opensmile_data) > 0:
+            loudness_values = [item.get('features', {}).get('Loudness_sma3', 0) for item in opensmile_data]
+            jitter_values = [item.get('features', {}).get('jitterLocal_sma3nz', 0) for item in opensmile_data]
+            
+            avg_loudness = sum(loudness_values) / len(loudness_values)
+            max_loudness = max(loudness_values)
+            min_loudness = min(loudness_values)
+            avg_jitter = sum(jitter_values) / len(jitter_values)
+            max_jitter = max(jitter_values)
+            
+            prompt_parts.append(f"""
+【音声特徴の統計サマリー】
+- 平均音量: {avg_loudness:.3f} (範囲: {min_loudness:.3f}〜{max_loudness:.3f})
+- 平均声の震え: {avg_jitter:.6f} (最大: {max_jitter:.6f})
+- 無音区間: {jitter_values.count(0)}秒 / {len(jitter_values)}秒
+""")
+    else:
+        prompt_parts.append("""【音声特徴（OpenSMILE）】
+データなし
+""")
+    
     # SEDデータ（音響イベント）
     if sed_data:
         # 確率の高い上位20個のイベントのみ表示
@@ -174,48 +264,60 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         
         prompt_parts.append(f"""
 【検出された音響イベント（YAMNet）】
-※発話内容と時間帯から総合的に判断してください。
+※環境音や活動音の検出結果です。発話内容と時間帯から総合的に判断してください。
 {chr(10).join(events_formatted)}
 """)
     else:
-        prompt_parts.append("""【音響イベント】
+        prompt_parts.append("""【音響イベント（YAMNet）】
 データなし
 """)
     
-    # 分析指示（1日分のプロンプトから参考にした形式）
+    # 分析指示（時系列分析を重視）
     prompt_parts.append(f"""
-✅ 出力形式・ルール
-以下のJSON形式で分析結果を返してください。
+✅ 総合分析と出力形式
+
+以下のJSON形式で、時系列変化を踏まえた分析結果を返してください。
 
 **出力例:**
 ```json
 {{
   "time_block": "{time_block}",
-  "summary": "この30分間の状況を2-3文で説明。発話内容と時間帯を重視。",
+  "summary": "30分間の全体的な状況と感情の流れを2-3文で説明",
   "vibe_score": -36,
   "confidence_score": 0.85,
+  "temporal_analysis": {{
+    "emotion_trajectory": "前半は穏やか→中盤で興奮→後半は落ち着く",
+    "peak_moments": ["11:30:06 - 大声での発話（興奮）", "11:30:23 - 活発な活動"],
+    "quiet_periods": ["11:30:16-11:30:21 - ほぼ無音（集中または休息）"]
+  }},
+  "acoustic_features": {{
+    "average_loudness": 0.186,
+    "loudness_trend": "increasing/stable/decreasing",
+    "voice_stability": "安定/やや不安定/不安定",
+    "notable_patterns": ["声の震えが増加（緊張の兆候）"]
+  }},
   "key_observations": [
-    "観察された重要な点1",
-    "観察された重要な点2"
+    "時系列データから観察された重要な点1",
+    "発話と音響特徴の相関から判明した点2"
   ],
-  "detected_mood": "neutral/positive/negative/anxious/relaxed/focused等",
+  "detected_mood": "neutral/positive/negative/anxious/relaxed/excited/tired等",
   "detected_activities": [
-    "推定される活動1",
-    "推定される活動2"
+    "推定される主な活動",
+    "副次的な活動"
   ],
-  "context_notes": "時間帯や文脈から推測される状況"
+  "context_notes": "時間帯、音声特徴の変化パターン、環境音から推測される詳細な状況"
 }}
 ```
 
-🔍 **必須遵守ルール**
+🔍 **分析の重点**
 | 要素 | 指示内容 |
 |------|----------|
-| **vibe_score** | -100〜+100の整数値。ポジティブ感情は正、ネガティブ感情は負、中立は0付近 強い兆候がある場合は ±60 以上を積極使用 -100〜+100 をフルレンジで使い、中央付近に集中させない |
-| **confidence_score** | 0.0〜1.0の小数値。分析の確信度（データが少ない場合は低く） |
-| **発話なし時の処理** | "(発話なし)"の場合、音響イベントや時間帯から活動を推測（深夜なら睡眠、日中なら集中作業など） |
-| **音響イベントの扱い** | 発話内容を補完。発話内容や時間帯と矛盾する場合は無視。文脈に合う場合のみ参考に |
-| **summary** | 具体的で簡潔に。「〜している」「〜と思われる」など明確な表現を使用 |
-| **detected_mood** | 英語で1単語。primary emotionを記載 |
+| **vibe_score** | -100〜+100の整数値。時系列データ全体の傾向を反映。瞬間的なピークよりも全体的な流れを重視 |
+| **時系列分析** | 音声特徴の変化パターンから感情の推移を読み取る。急激な変化に注目 |
+| **マルチモーダル統合** | 発話内容 × 音声特徴 × 環境音を総合的に解釈 |
+| **confidence_score** | データの質と量、各モダリティの一致度を考慮。時系列データが豊富なら高く |
+| **temporal_analysis** | 必ず時間軸での変化を記述。「前半」「中盤」「後半」や具体的な時刻を使用 |
+| **acoustic_features** | OpenSMILEデータの統計値と変化傾向を必ず含める |
 
 **JSONのみを返してください。説明や補足は一切不要です。**
 """)
@@ -277,20 +379,22 @@ async def process_and_save_to_dashboard(supabase_client, device_id: str, date: s
 
 async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_block: str) -> Dict[str, Any]:
     """
-    処理: Whisper + SEDデータ（behavior_yamnetテーブル使用）+ 観測対象者情報
+    処理: Whisper + SEDデータ（behavior_yamnetテーブル使用）+ OpenSMILEデータ + 観測対象者情報
     """
     # データ取得
     transcription = await get_whisper_data(supabase_client, device_id, date, time_block)
     sed_data = await get_sed_data(supabase_client, device_id, date, time_block)
+    opensmile_data = await get_opensmile_data(supabase_client, device_id, date, time_block)
     subject_info = await get_subject_info(supabase_client, device_id)
     
-    # プロンプト生成（dateパラメータと観測対象者情報も渡す）
-    prompt = generate_timeblock_prompt(transcription, sed_data, time_block, date, subject_info)
+    # プロンプト生成（OpenSMILEデータも含めて渡す）
+    prompt = generate_timeblock_prompt(transcription, sed_data, time_block, date, subject_info, opensmile_data)
     
     # デバッグ用：取得したデータの情報を出力
     print(f"📊 Data retrieved for {time_block}:")
     print(f"  - Transcription: {'Yes' if transcription else 'No'} ({len(transcription) if transcription else 0} chars)")
     print(f"  - SED Events: {'Yes' if sed_data else 'No'} ({len(sed_data) if sed_data else 0} events)")
+    print(f"  - OpenSMILE Timeline: {'Yes' if opensmile_data else 'No'} ({len(opensmile_data) if opensmile_data else 0} seconds)")
     print(f"  - Subject Info: {'Yes' if subject_info else 'No'}")
     
     # プロンプト保存（dashboardテーブルへ）
@@ -298,7 +402,7 @@ async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_
     
     return {
         "status": "success",
-        "version": "v2",
+        "version": "v3",  # バージョンをv3に更新
         "device_id": device_id,
         "date": date,
         "time_block": time_block,
@@ -306,5 +410,7 @@ async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_
         "prompt_length": len(prompt),
         "has_transcription": transcription is not None and len(transcription.strip()) > 0,
         "has_sed_data": sed_data is not None and len(sed_data) > 0,
-        "sed_events_count": len(sed_data) if sed_data else 0
+        "has_opensmile_data": opensmile_data is not None and len(opensmile_data) > 0,
+        "sed_events_count": len(sed_data) if sed_data else 0,
+        "opensmile_seconds": len(opensmile_data) if opensmile_data else 0
     }

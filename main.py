@@ -302,14 +302,12 @@ async def test_timeblock_processing():
         
         supabase = get_supabase_client()
         
-        # V1とV2の両方をテスト
-        result_v1 = await process_timeblock_v1(supabase, test_device_id, test_date, test_time_block)
-        result_v2 = await process_timeblock_v2(supabase, test_device_id, test_date, test_time_block)
+        # V3（OpenSMILE統合版）をテスト
+        result = await process_timeblock_v2(supabase, test_device_id, test_date, test_time_block)
         
         return {
-            "message": "テスト完了",
-            "v1_result": result_v1,
-            "v2_result": result_v2
+            "message": "テスト完了（OpenSMILE統合版）",
+            "result": result
         }
         
     except Exception as e:
