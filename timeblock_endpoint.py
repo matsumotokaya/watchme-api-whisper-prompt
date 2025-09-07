@@ -442,8 +442,7 @@ async def update_whisper_status(supabase_client, device_id: str, date: str, time
     """
     try:
         data = {
-            'status': 'completed',
-            'updated_at': datetime.now().isoformat()
+            'status': 'completed'
         }
         
         result = supabase_client.table('vibe_whisper').update(data).eq(
@@ -467,8 +466,7 @@ async def update_yamnet_status(supabase_client, device_id: str, date: str, time_
     """
     try:
         data = {
-            'status': 'completed',
-            'updated_at': datetime.now().isoformat()
+            'status': 'completed'
         }
         
         result = supabase_client.table('behavior_yamnet').update(data).eq(
@@ -492,8 +490,7 @@ async def update_opensmile_status(supabase_client, device_id: str, date: str, ti
     """
     try:
         data = {
-            'status': 'completed',
-            'updated_at': datetime.now().isoformat()
+            'status': 'completed'
         }
         
         result = supabase_client.table('emotion_opensmile').update(data).eq(
