@@ -436,6 +436,81 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     return "\n".join(prompt_parts)
 
 
+async def update_whisper_status(supabase_client, device_id: str, date: str, time_block: str):
+    """
+    vibe_whisperテーブルのstatusをcompletedに更新
+    """
+    try:
+        data = {
+            'status': 'completed',
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        result = supabase_client.table('vibe_whisper').update(data).eq(
+            'device_id', device_id
+        ).eq(
+            'date', date
+        ).eq(
+            'time_block', time_block
+        ).execute()
+        
+        print(f"✅ Updated vibe_whisper status to completed for {time_block}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error updating vibe_whisper status: {e}")
+        return False
+
+
+async def update_yamnet_status(supabase_client, device_id: str, date: str, time_block: str):
+    """
+    behavior_yamnetテーブルのstatusをcompletedに更新
+    """
+    try:
+        data = {
+            'status': 'completed',
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        result = supabase_client.table('behavior_yamnet').update(data).eq(
+            'device_id', device_id
+        ).eq(
+            'date', date
+        ).eq(
+            'time_block', time_block
+        ).execute()
+        
+        print(f"✅ Updated behavior_yamnet status to completed for {time_block}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error updating behavior_yamnet status: {e}")
+        return False
+
+
+async def update_opensmile_status(supabase_client, device_id: str, date: str, time_block: str):
+    """
+    emotion_opensmileテーブルのstatusをcompletedに更新
+    """
+    try:
+        data = {
+            'status': 'completed',
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        result = supabase_client.table('emotion_opensmile').update(data).eq(
+            'device_id', device_id
+        ).eq(
+            'date', date
+        ).eq(
+            'time_block', time_block
+        ).execute()
+        
+        print(f"✅ Updated emotion_opensmile status to completed for {time_block}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error updating emotion_opensmile status: {e}")
+        return False
+
+
 async def save_prompt_to_dashboard(supabase_client, device_id: str, date: str, time_block: str, prompt: str):
     """
     生成したプロンプトをdashboardテーブルに保存
@@ -491,6 +566,7 @@ async def process_and_save_to_dashboard(supabase_client, device_id: str, date: s
 async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_block: str) -> Dict[str, Any]:
     """
     処理: Whisper + SEDデータ（behavior_yamnetテーブル使用）+ OpenSMILEデータ + 観測対象者情報
+    プロンプト生成後、使用されたデータソースのstatusをcompletedに更新
     """
     # データ取得
     transcription = await get_whisper_data(supabase_client, device_id, date, time_block)
@@ -498,18 +574,57 @@ async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_
     opensmile_data = await get_opensmile_data(supabase_client, device_id, date, time_block)
     subject_info = await get_subject_info(supabase_client, device_id)
     
+    # データ存在フラグを記録
+    has_whisper = transcription is not None
+    has_yamnet = sed_data is not None and len(sed_data) > 0
+    has_opensmile = opensmile_data is not None and len(opensmile_data) > 0
+    
     # プロンプト生成（OpenSMILEデータも含めて渡す）
     prompt = generate_timeblock_prompt(transcription, sed_data, time_block, date, subject_info, opensmile_data)
     
     # デバッグ用：取得したデータの情報を出力
     print(f"📊 Data retrieved for {time_block}:")
-    print(f"  - Transcription: {'Yes' if transcription else 'No'} ({len(transcription) if transcription else 0} chars)")
-    print(f"  - SED Events: {'Yes' if sed_data else 'No'} ({len(sed_data) if sed_data else 0} events)")
-    print(f"  - OpenSMILE Timeline: {'Yes' if opensmile_data else 'No'} ({len(opensmile_data) if opensmile_data else 0} seconds)")
+    print(f"  - Transcription: {'Yes' if has_whisper else 'No'} ({len(transcription) if transcription else 0} chars)")
+    print(f"  - SED Events: {'Yes' if has_yamnet else 'No'} ({len(sed_data) if sed_data else 0} events)")
+    print(f"  - OpenSMILE Timeline: {'Yes' if has_opensmile else 'No'} ({len(opensmile_data) if opensmile_data else 0} seconds)")
     print(f"  - Subject Info: {'Yes' if subject_info else 'No'}")
     
     # プロンプト保存（dashboardテーブルへ）
-    await save_prompt_to_dashboard(supabase_client, device_id, date, time_block, prompt)
+    dashboard_saved = await save_prompt_to_dashboard(supabase_client, device_id, date, time_block, prompt)
+    
+    # dashboardへの保存が成功した場合のみ、各データソースのstatusを更新
+    status_updates = {
+        "whisper_updated": False,
+        "yamnet_updated": False,
+        "opensmile_updated": False
+    }
+    
+    if dashboard_saved:
+        print(f"\n📝 Updating status for used data sources...")
+        
+        # 実際にデータが存在した場合のみstatusを更新
+        if has_whisper:
+            status_updates["whisper_updated"] = await update_whisper_status(
+                supabase_client, device_id, date, time_block
+            )
+        
+        if has_yamnet:
+            status_updates["yamnet_updated"] = await update_yamnet_status(
+                supabase_client, device_id, date, time_block
+            )
+        
+        if has_opensmile:
+            status_updates["opensmile_updated"] = await update_opensmile_status(
+                supabase_client, device_id, date, time_block
+            )
+        
+        # 更新結果のサマリー
+        print(f"\n✨ Status update summary:")
+        print(f"  - vibe_whisper: {'✅ Updated' if status_updates['whisper_updated'] else '⏭️ Skipped (no data)' if not has_whisper else '⚠️ Update failed'}")
+        print(f"  - behavior_yamnet: {'✅ Updated' if status_updates['yamnet_updated'] else '⏭️ Skipped (no data)' if not has_yamnet else '⚠️ Update failed'}")
+        print(f"  - emotion_opensmile: {'✅ Updated' if status_updates['opensmile_updated'] else '⏭️ Skipped (no data)' if not has_opensmile else '⚠️ Update failed'}")
+    else:
+        print(f"⚠️ Dashboard save failed, skipping status updates")
     
     return {
         "status": "success",
@@ -519,9 +634,11 @@ async def process_timeblock_v2(supabase_client, device_id: str, date: str, time_
         "time_block": time_block,
         "prompt": prompt,  # プロンプトを返り値に追加
         "prompt_length": len(prompt),
-        "has_transcription": transcription is not None and len(transcription.strip()) > 0,
-        "has_sed_data": sed_data is not None and len(sed_data) > 0,
-        "has_opensmile_data": opensmile_data is not None and len(opensmile_data) > 0,
+        "has_transcription": has_whisper and len(transcription.strip()) > 0,
+        "has_sed_data": has_yamnet,
+        "has_opensmile_data": has_opensmile,
         "sed_events_count": len(sed_data) if sed_data else 0,
-        "opensmile_seconds": len(opensmile_data) if opensmile_data else 0
+        "opensmile_seconds": len(opensmile_data) if opensmile_data else 0,
+        "dashboard_saved": dashboard_saved,
+        "status_updates": status_updates
     }
