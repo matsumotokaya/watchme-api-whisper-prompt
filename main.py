@@ -315,6 +315,239 @@ async def test_timeblock_processing():
         return {"error": str(e)}
 
 
+@app.get("/generate-dashboard-summary")
+async def generate_dashboard_summary(
+    device_id: str = Query(..., description="デバイスID"),
+    date: str = Query(..., description="日付 (YYYY-MM-DD)")
+):
+    """
+    dashboardテーブルの1日分の分析結果を統合してdashboard_summaryテーブルに保存
+    
+    処理内容:
+    1. dashboardテーブルから該当日のstatus='completed'のレコードを取得
+    2. 各タイムブロックのanalysis_resultを時系列順に統合
+    3. 統合データをdashboard_summaryテーブルにUPSERT
+    """
+    try:
+        # 日付形式の検証
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="無効な日付形式です。YYYY-MM-DD形式で入力してください。"
+            )
+        
+        # Supabaseクライアント取得
+        supabase = get_supabase_client()
+        
+        # dashboardテーブルから該当日のcompletedレコードを取得（時系列順）
+        dashboard_response = supabase.table("dashboard").select("*").eq(
+            "device_id", device_id
+        ).eq(
+            "date", date
+        ).eq(
+            "status", "completed"
+        ).order(
+            "time_block", desc=False
+        ).execute()
+        
+        if not dashboard_response.data:
+            return {
+                "status": "warning",
+                "message": f"処理済みデータが見つかりません。device_id: {device_id}, date: {date}",
+                "processed_count": 0
+            }
+        
+        # データの整理と統合
+        processed_blocks = dashboard_response.data
+        processed_count = len(processed_blocks)
+        
+        # 最後のタイムブロックを取得
+        last_time_block = processed_blocks[-1]["time_block"] if processed_blocks else None
+        
+        # タイムライン配列の作成
+        timeline = []
+        total_vibe_score = 0
+        valid_score_count = 0
+        positive_blocks = 0
+        negative_blocks = 0
+        neutral_blocks = 0
+        
+        for block in processed_blocks:
+            # analysis_resultから重要な情報を抽出
+            analysis_result = block.get("analysis_result", {})
+            vibe_score = block.get("vibe_score")
+            
+            # スコアの統計
+            if vibe_score is not None:
+                total_vibe_score += vibe_score
+                valid_score_count += 1
+                
+                if vibe_score > 20:
+                    positive_blocks += 1
+                elif vibe_score < -20:
+                    negative_blocks += 1
+                else:
+                    neutral_blocks += 1
+            
+            # タイムラインエントリの作成
+            timeline_entry = {
+                "time_block": block["time_block"],
+                "summary": block.get("summary", ""),
+                "vibe_score": vibe_score,
+                "analysis_result": analysis_result
+            }
+            
+            # analysis_resultから重要な要素を抽出（存在する場合）
+            if isinstance(analysis_result, dict):
+                timeline_entry["key_emotions"] = analysis_result.get("emotions", [])
+                timeline_entry["activities"] = analysis_result.get("activities", [])
+                timeline_entry["concerns"] = analysis_result.get("concerns", [])
+            
+            timeline.append(timeline_entry)
+        
+        # 統計情報の計算
+        avg_vibe_score = total_vibe_score / valid_score_count if valid_score_count > 0 else None
+        
+        # 統合プロンプトの生成
+        daily_summary_prompt = generate_daily_summary_prompt(
+            device_id=device_id,
+            date=date,
+            timeline=timeline,
+            statistics={
+                "avg_vibe_score": avg_vibe_score,
+                "positive_blocks": positive_blocks,
+                "negative_blocks": negative_blocks,
+                "neutral_blocks": neutral_blocks,
+                "total_blocks": processed_count
+            }
+        )
+        
+        # 統合データの構築
+        integrated_data = {
+            "device_id": device_id,
+            "date": date,
+            "time_range": f"00:00-{last_time_block.replace('-', ':')}",
+            "total_blocks": 48,  # 1日の総ブロック数
+            "processed_blocks": processed_count,
+            "timeline": timeline,
+            "daily_summary_prompt": daily_summary_prompt,
+            "statistics": {
+                "avg_vibe_score": avg_vibe_score,
+                "positive_blocks": positive_blocks,
+                "negative_blocks": negative_blocks,
+                "neutral_blocks": neutral_blocks,
+                "valid_score_count": valid_score_count
+            },
+            "generated_at": datetime.now().isoformat()
+        }
+        
+        # dashboard_summaryテーブルにUPSERT
+        upsert_data = {
+            "device_id": device_id,
+            "date": date,
+            "integrated_data": integrated_data,
+            "processed_count": processed_count,
+            "last_time_block": last_time_block,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        # UPSERTの実行（既存データは上書き）
+        summary_response = supabase.table("dashboard_summary").upsert(
+            upsert_data,
+            on_conflict="device_id,date"
+        ).execute()
+        
+        return {
+            "status": "success",
+            "message": f"ダッシュボードサマリーを生成しました。処理済みブロック数: {processed_count}",
+            "device_id": device_id,
+            "date": date,
+            "processed_count": processed_count,
+            "last_time_block": last_time_block,
+            "statistics": integrated_data["statistics"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"エラー詳細: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"サーバーエラー: {str(e)}")
+
+
+def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict) -> str:
+    """
+    1日分のタイムブロックデータを統合プロンプトに変換
+    
+    Args:
+        device_id: デバイスID
+        date: 日付
+        timeline: タイムブロックごとのデータリスト
+        statistics: 統計情報
+        
+    Returns:
+        str: ChatGPT用の統合プロンプト
+    """
+    # タイムラインテキストの生成
+    timeline_texts = []
+    for entry in timeline:
+        time = entry["time_block"].replace("-", ":")
+        summary = entry.get("summary", "データなし")
+        score = entry.get("vibe_score", "N/A")
+        
+        if summary and summary != "データなし":
+            timeline_texts.append(f"【{time}】(スコア: {score})\n{summary}")
+    
+    timeline_text = "\n\n".join(timeline_texts) if timeline_texts else "記録されたデータがありません。"
+    
+    # プロンプトの生成
+    prompt = f"""# 1日の心理状態統合分析
+
+## 基本情報
+- デバイスID: {device_id}
+- 日付: {date}
+- 処理済みタイムブロック: {statistics.get('total_blocks', 0)}個
+
+## 時系列データ
+{timeline_text}
+
+## 統計サマリー
+- 平均感情スコア: {statistics.get('avg_vibe_score', 'N/A')}
+- ポジティブな時間帯: {statistics.get('positive_blocks', 0)}ブロック
+- ネガティブな時間帯: {statistics.get('negative_blocks', 0)}ブロック
+- ニュートラルな時間帯: {statistics.get('neutral_blocks', 0)}ブロック
+
+## 分析依頼
+上記の1日の時系列データを基に、以下の観点で統合的な分析を行ってください：
+
+1. **1日の全体的な心理的傾向**
+   - 感情の起伏パターン
+   - 特徴的な時間帯
+   - 全体的な心理状態の評価
+
+2. **重要なイベントや転換点**
+   - 感情が大きく変化したタイミング
+   - ポジティブ/ネガティブなピーク
+   - 注目すべき出来事
+
+3. **パターンと洞察**
+   - 繰り返し現れるテーマ
+   - 時間帯による傾向
+   - 潜在的な課題や強み
+
+4. **総合評価とアドバイス**
+   - 1日を通しての心理的健康度
+   - 改善のための具体的な提案
+   - ポジティブな要素の強化方法
+
+JSONフォーマットで、構造化された分析結果を提供してください。"""
+    
+    return prompt
+
+
 if __name__ == "__main__":
     # アプリケーションの起動
     uvicorn.run(app, host="0.0.0.0", port=8009)

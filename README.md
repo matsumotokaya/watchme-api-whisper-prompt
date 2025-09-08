@@ -54,7 +54,17 @@ git push origin main
 
 ---
 
-## ✅ 最新アップデート (2025-09-07)
+## ✅ 最新アップデート (2025-09-08)
+
+**🆕 ダッシュボード統合機能**: dashboardテーブルの1日分の分析結果を統合
+- 新エンドポイント `/generate-dashboard-summary` を追加
+- dashboardテーブルのstatus='completed'データを時系列で統合
+- analysis_result、summary、vibe_scoreを集約して統計情報を生成
+- ChatGPT用の統合プロンプトを自動生成
+- dashboard_summaryテーブルにUPSERT（同じ日付のデータは自動更新）
+- リアルタイムで最新の1日サマリーを提供
+
+### 過去のアップデート (2025-09-07)
 
 **🆕 ステータス管理機能**: タイムブロック処理後、使用されたデータソースのstatusを自動更新
 - vibe_whisper、behavior_yamnet、emotion_opensmileテーブルのstatusカラムを"completed"に更新
@@ -134,6 +144,15 @@ curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d
 curl -X GET "http://localhost:8009/generate-timeblock-prompt?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-01&time_block=16-00"
 ```
 
+#### ダッシュボード統合処理（新機能）
+```bash
+# 1日分のダッシュボード分析結果を統合
+curl -X GET "http://localhost:8009/generate-dashboard-summary?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-08"
+
+# 外部URL（本番環境）
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-dashboard-summary?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-08"
+```
+
 #### ヘルスチェック
 ```bash
 curl -X GET "https://api.hey-watch.me/vibe-aggregator/health"
@@ -172,6 +191,7 @@ curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?dev
 | `GET /health` | ヘルスチェック | - | - | - |
 | `GET /generate-mood-prompt-supabase` | 1日分統合版（48タイムブロック） | vibe_whisper_promptテーブル | vibe_whisper | - |
 | `GET /generate-timeblock-prompt` | タイムブロック単位の高精度プロンプト生成 | dashboardテーブル（promptカラム） | vibe_whisper + behavior_yamnet + emotion_opensmile + subjects | ✅ 各テーブルのstatusをcompletedに更新 |
+| `GET /generate-dashboard-summary` | 1日分のダッシュボード分析結果統合 | dashboard_summaryテーブル | dashboard (status='completed') | - |
 
 ### ✅ 実装完了機能
 
@@ -196,6 +216,21 @@ curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?dev
   - データが存在する場合のみ更新（欠損データはスキップ）
 - **注**: V1エンドポイント（Whisperのみ）は削除済み。V3（OpenSMILE統合版）に統一
 
+#### ダッシュボード統合処理（/generate-dashboard-summary）（新機能 2025-09-08）
+- **1日分のダッシュボード分析結果を統合**
+- **データソース**: dashboardテーブル（status='completed'のレコード）
+- **統合内容**:
+  - 各タイムブロックのanalysis_result、summary、vibe_scoreを集約
+  - 時系列順にタイムラインを構築
+  - 統計情報の自動計算（平均スコア、ポジティブ/ネガティブ/ニュートラル分布）
+- **出力先**: dashboard_summaryテーブル
+  - integrated_dataカラムにJSON形式で全データを保存
+  - 同じdevice_id + dateの組み合わせは常に最新版に更新（UPSERT）
+- **利用シーン**:
+  - ユーザーが1日の総合的な心理状態を確認
+  - リアルタイムで最新の統合サマリーを提供
+  - 時間経過とともに自動的に更新される動的なレポート
+
 ### 🔄 WatchMeエコシステムでの位置づけ
 
 #### 1日分統合処理フロー
@@ -205,7 +240,7 @@ iOS App → Whisper API → vibe_whisper → [このAPI] → vibe_whisper_prompt
                                     プロンプト生成・DB保存
 ```
 
-#### タイムブロック単位処理フロー（新）
+#### タイムブロック単位処理フロー
 ```
 vibe_whisper      ┐
 behavior_yamnet   ├→ [このAPI] → dashboard (prompt) → ChatGPT API → dashboard (summary/score)
@@ -213,9 +248,17 @@ emotion_opensmile ┘      ↓
                      各テーブルのstatus → "completed"
 ```
 
+#### ダッシュボード統合フロー（新）
+```
+dashboard (completed) → [このAPI] → dashboard_summary (integrated_data)
+                            ↑
+                    統合プロンプト生成・統計計算
+```
+
 **このAPIの役割**: 
 - 1日分統合: vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
 - タイムブロック処理: vibe_whisper + behavior_yamnet + emotion_opensmileから読み込み → 高精度プロンプト生成 → dashboardテーブルに保存 → 各データソースのstatusを更新
+- ダッシュボード統合: dashboardテーブル（completed）から読み込み → 統合データ生成 → dashboard_summaryテーブルに保存
 
 ## 📁 データ構造
 
@@ -275,9 +318,23 @@ emotion_opensmile ┘      ↓
 - `summary`: ChatGPT分析結果のサマリー（api_gpt_v1で処理後）
 - `vibe_score`: 感情スコア（-100〜100、api_gpt_v1で処理後）
 - `analysis_result`: ChatGPT分析結果の完全なJSON（api_gpt_v1で処理後）
+- `status`: 処理ステータス（"pending" → "completed"）
 - `processed_at`: 処理日時
 - `created_at`: 作成日時
 - `updated_at`: 更新日時
+
+#### dashboard_summaryテーブル（1日分統合・新規追加）
+- `device_id`: デバイス識別子
+- `date`: 日付（YYYY-MM-DD）
+- `integrated_data`: 統合データ（JSONB形式）
+  - `timeline`: 時系列タイムブロックデータ
+  - `statistics`: 統計情報（平均スコア、分布など）
+  - `daily_summary_prompt`: ChatGPT用統合プロンプト
+  - `time_range`: 処理された時間範囲
+- `processed_count`: 処理済みタイムブロック数
+- `last_time_block`: 最後に処理されたタイムブロック
+- `created_at`: 作成日時
+- `updated_at`: 更新日時（同じ日付のデータは常に最新版に更新）
 
 ### プロンプト形式の特徴
 生成されるプロンプトは、ChatGPTに心理グラフ用のJSONデータを生成させるための専用形式です：
