@@ -51,9 +51,9 @@ def get_weekday_info(date_str: str) -> Dict[str, Any]:
 
 
 def generate_age_context(subject_info: Optional[Dict]) -> str:
-    """観測対象者の基本情報のみを提供（決めつけを排除）"""
+    """観測対象者情報から年齢に応じたコンテキストを動的生成"""
     if not subject_info:
-        return "観測対象者情報：不明"
+        return "観測対象者の詳細情報なし。発話内容と音響特徴から総合的に判断してください。"
     
     age = subject_info.get('age')
     gender = subject_info.get('gender', '不明')
@@ -61,22 +61,59 @@ def generate_age_context(subject_info: Optional[Dict]) -> str:
     
     context_parts = []
     
-    # 基本情報のみ
+    # 年齢別の一般的傾向（決めつけない）
     if age is not None:
-        context_parts.append(f"{age}歳 {gender}")
+        if age <= 3:
+            context_parts.append(f"{age}歳{gender}：言語発達初期。単語や二語文が中心。泣き声や感情表現が主なコミュニケーション手段。")
+        elif age <= 6:
+            context_parts.append(f"{age}歳{gender}：幼児期。ごっこ遊び・独り言・想像遊びは正常な発達。感情表現が豊か。")
+        elif age <= 12:
+            context_parts.append(f"{age}歳{gender}：学童期。学校生活・友人関係・習い事などが生活の中心。遊びと学習が混在。")
+        elif age <= 18:
+            context_parts.append(f"{age}歳{gender}：思春期。進路・友人関係・アイデンティティ形成期。感情の起伏あり。")
+        elif age <= 25:
+            context_parts.append(f"{age}歳{gender}：若年成人期。仕事・恋愛・自立の課題。ストレスと成長の時期。")
+        elif age <= 60:
+            context_parts.append(f"{age}歳{gender}：成人期。仕事・家庭・社会的責任。多様なストレス要因あり。")
+        else:
+            context_parts.append(f"{age}歳{gender}：高齢期。健康・家族・生きがいが主要テーマ。経験に基づく安定した判断。")
     else:
-        context_parts.append(f"年齢不明 {gender}")
+        context_parts.append(f"年齢不明の{gender}")
     
-    # 個別の備考情報を重視
+    # notesがあれば追加
     if notes:
-        context_parts.append(f"備考：{notes}")
+        context_parts.append(f"追加情報：{notes}")
     
-    return " / ".join(context_parts)
+    return " ".join(context_parts)
 
 
 def generate_time_context(hour: int, minute: int) -> str:
-    """時刻を表示用フォーマットで返す"""
-    return f"{hour:02d}:{minute:02d}"
+    """時間帯から一般的な活動の可能性を提示（決めつけない）"""
+    contexts = []
+    time_str = f"{hour:02d}:{minute:02d}"
+    
+    if 5 <= hour < 7:
+        contexts.append(f"{time_str}（早朝：起床・朝の準備の可能性）")
+    elif 7 <= hour < 9:
+        contexts.append(f"{time_str}（朝：朝食・登校/出勤準備の可能性）")
+    elif 9 <= hour < 12:
+        contexts.append(f"{time_str}（午前：活動時間・仕事/学習の可能性）")
+    elif 12 <= hour < 14:
+        contexts.append(f"{time_str}（昼：昼食・休憩時間の可能性）")
+    elif 14 <= hour < 17:
+        contexts.append(f"{time_str}（午後：活動時間・おやつ時間の可能性）")
+    elif 17 <= hour < 19:
+        contexts.append(f"{time_str}（夕方：帰宅・夕食準備の可能性）")
+    elif 19 <= hour < 21:
+        contexts.append(f"{time_str}（夜：夕食・家族団らん・入浴の可能性）")
+    elif 21 <= hour < 23:
+        contexts.append(f"{time_str}（夜遅く：就寝準備・自由時間の可能性）")
+    elif 23 <= hour or hour < 5:
+        contexts.append(f"{time_str}（深夜：就寝時間の可能性が高い）")
+    else:
+        contexts.append(time_str)
+    
+    return contexts[0] if contexts else time_str
 
 async def get_whisper_data(supabase_client, device_id: str, date: str, time_block: str) -> Optional[str]:
     """
@@ -310,15 +347,11 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 
     # ==================== 5. メタ情報 ====================
     
-    # 曜日情報を取得
-    weekday_info = get_weekday_info(date) if date else {"weekday": "不明", "day_type": "不明"}
-    
-    prompt_parts.append(f"""【分析対象】
+【分析対象】
 - 地域: 日本
 - 季節: {get_season(int(date.split('-')[1])) if date else '不明'}
 - 日付: {date if date else '不明'}
-- 曜日: {weekday_info['weekday']}（{weekday_info['day_type']}）
-- 時刻: {generate_time_context(hour, minute)}
+- 時間帯: {generate_time_context(hour, minute)}
 - 時間範囲: {hour:02d}:{minute:02d}〜{end_hour:02d}:{end_minute:02d}（30分ブロック）
 """)
     
