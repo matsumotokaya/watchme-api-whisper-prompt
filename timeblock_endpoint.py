@@ -75,32 +75,8 @@ def generate_age_context(subject_info: Optional[Dict]) -> str:
 
 
 def generate_time_context(hour: int, minute: int) -> str:
-    """時間帯から一般的な活動の可能性を提示（決めつけない）"""
-    contexts = []
-    time_str = f"{hour:02d}:{minute:02d}"
-    
-    if 5 <= hour < 7:
-        contexts.append(f"{time_str}（早朝：起床・朝の準備の可能性）")
-    elif 7 <= hour < 9:
-        contexts.append(f"{time_str}（朝：朝食・登校/出勤準備の可能性）")
-    elif 9 <= hour < 12:
-        contexts.append(f"{time_str}（午前：活動時間・仕事/学習の可能性）")
-    elif 12 <= hour < 14:
-        contexts.append(f"{time_str}（昼：昼食・休憩時間の可能性）")
-    elif 14 <= hour < 17:
-        contexts.append(f"{time_str}（午後：活動時間・おやつ時間の可能性）")
-    elif 17 <= hour < 19:
-        contexts.append(f"{time_str}（夕方：帰宅・夕食準備の可能性）")
-    elif 19 <= hour < 21:
-        contexts.append(f"{time_str}（夜：夕食・家族団らん・入浴の可能性）")
-    elif 21 <= hour < 23:
-        contexts.append(f"{time_str}（夜遅く：就寝準備・自由時間の可能性）")
-    elif 23 <= hour or hour < 5:
-        contexts.append(f"{time_str}（深夜：就寝時間の可能性が高い）")
-    else:
-        contexts.append(time_str)
-    
-    return contexts[0] if contexts else time_str
+    """時刻を表示用フォーマットで返す"""
+    return f"{hour:02d}:{minute:02d}"
 
 async def get_whisper_data(supabase_client, device_id: str, date: str, time_block: str) -> Optional[str]:
     """
