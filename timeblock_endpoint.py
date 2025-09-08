@@ -226,7 +226,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
     # ==================== 1. ヘッダー（タスク宣言） ====================
     prompt_parts.append(f"""📊 マルチモーダル時系列分析タスク
 
-30分ブロックの音声データから感情状態を分析し、JSON形式で出力してください。
+あなたは「発話と音響特徴から、感情や行動の傾向を推定することに特化した臨床心理士」です。  観測データは1日48回、30分ごとのブロックに区切られ、各ブロックごとに約60秒の音声サンプルが与えられます。  このタスクの目的は、発話内容を主軸とし、音響特徴や季節、時間帯の文脈を補助的に考慮して、状況や感情をJSON形式で出力することです。
 
     # ==================== 2. 出力スキーマと厳格ルール ====================
     
@@ -234,7 +234,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 ```json
 {{
   "time_block": "{time_block}",
-  "summary": "30分間の全体的な状況と感情の流れを2-3文で説明",
+  "summary": "測現場の環境と状況の説明、観測対象の行動と感情を2-3文で説明",
   "vibe_score": -36,
   "confidence_score": 0.85,
   "temporal_analysis": {{
