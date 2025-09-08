@@ -236,11 +236,10 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
   "time_block": "{time_block}",
   "summary": "測現場の環境と状況の説明、観測対象の行動と感情を2-3文で説明",
   "vibe_score": -36,
-  "confidence_score": 0.85,
-  "temporal_analysis": {{
-    "emotion_trajectory": "前半は穏やか→中盤で興奮→後半は落ち着く",
-    "peak_moments": ["特定時刻の感情ピーク説明"],
-    "quiet_periods": ["静寂期間の説明"]
+  "analysis": {{
+    "mood": "全体的な気分の状態（例：穏やか、イライラ、楽しい、憂鬱など）",
+    "behavior": "観察された行動パターン（例：活発に会話、静かに作業、遊んでいる、休息中など）",
+    "emotion": "検出された感情や変化（例：喜び、興奮、不安→安心、平常→悲しみなど）"
   }},
   "acoustic_features": {{
     "average_loudness": 0.186,
@@ -268,21 +267,20 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 **観測対象者のプロファイリング:**
 {generate_age_context(subject_info)}
 
+**分析方針:**
+- 観測対象者の年齢・性別、プロフィールを考慮した自然な解釈を行う
+- 観測の場所、日時、土日祝日の曜日感覚や季節の一般的な特徴など、前提状況を活用した分析を行う
+- 時間帯における行動を想定する、特に起床時、午前、ランチタイム、就寝前など
+- データから直接観察できる事実を重視する
+
 **分析の優先順位（厳守）:**
-1. 第1優先: 発話内容と観測対象者の年齢・特性の照合
-2. 第2優先: 時間帯・季節との整合性確認
-3. 第3優先: 音響特徴（補完的に使用、主判断を覆すには強い根拠が必要）
+1. 第1優先: 発話内容から直接観察できる事実
+2. 第2優先: 音響特徴データから得られる客観的指標
 
-**誤解析防止の鉄則:**
-- 子供の演技的発話・ごっこ遊び → 年齢相応の正常な発達行動として評価
-- 独り言・自己対話 → 幼児〜学童期では正常（むしろ認知発達の証）
-- 時間帯のみでの異常判定 → 禁止（個人の生活リズムを尊重）
-- 感情の起伏 → 年齢・状況を考慮（子供は感情表現が豊か）
-
-**コンテキストを踏まえた解釈:**
-- 5歳児が怪獣ごっこで叫ぶ → ポジティブな遊び（ネガティブ判定しない）
-- 夕方の騒がしさ → 子供の活動時間として正常
-- 大人の独り言 → ストレス処理の可能性（必ずしもネガティブではない）
+**解釈における注意点:**
+- 子どもであれば、悪ふざけやごっこ遊びの可能性も考慮して発言を解釈する
+- データに現れない背景や理由があることを念頭に置く
+- 会話は常に親、家族など複数の話者、あるいはテレビやラジオのセリフが登場することを想定する
 
     # ==================== 4. 採点・スコア分布ポリシー ====================
     
@@ -307,14 +305,20 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 - データの完全性（全モダリティが揃っている）: 0.8〜1.0
 - 部分的データ: 0.4〜0.8
 - 単一モダリティのみ: 0.2〜0.4
-
+""")
+    
     # ==================== 5. メタ情報 ====================
     
+    # 曜日情報を取得
+    weekday_info = get_weekday_info(date) if date else {"weekday": "不明", "day_type": "不明"}
+    
+    prompt_parts.append(f"""
 【分析対象】
 - 地域: 日本
 - 季節: {get_season(int(date.split('-')[1])) if date else '不明'}
 - 日付: {date if date else '不明'}
-- 時間帯: {generate_time_context(hour, minute)}
+- 曜日: {weekday_info['weekday']}（{weekday_info['day_type']}）
+- 時刻: {generate_time_context(hour, minute)}
 - 時間範囲: {hour:02d}:{minute:02d}〜{end_hour:02d}:{end_minute:02d}（30分ブロック）
 """)
     
