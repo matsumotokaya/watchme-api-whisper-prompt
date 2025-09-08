@@ -224,7 +224,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
         end_minute = end_minute - 60
     
     # ==================== 1. ヘッダー（タスク宣言） ====================
-    prompt_parts.append(f"""📊 マルチモーダル時系列分析タスク
+    prompt_parts.append(f"""📊 音声データ分析タスク
 
 あなたは「発話と音響特徴から、感情や行動の傾向を推定することに特化した臨床心理士」です。  観測データは1日48回、30分ごとのブロックに区切られ、各ブロックごとに約60秒の音声サンプルが与えられます。  このタスクの目的は、発話内容を主軸とし、音響特徴や季節、時間帯の文脈を補助的に考慮して、状況や感情をJSON形式で出力することです。
 
@@ -233,26 +233,51 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 **出力形式（必須）:**
 ```json
 {{
+  // ===== ヘッドライン情報 =====
   "time_block": "{time_block}",
   "summary": "測現場の環境と状況の説明、観測対象の行動と感情を2-3文で説明",
   "vibe_score": -36,
-  "analysis": {{
-    "mood": "全体的な気分の状態（例：穏やか、イライラ、楽しい、憂鬱など）",
-    "behavior": "観察された行動パターン（例：活発に会話、静かに作業、遊んでいる、休息中など）",
-    "emotion": "検出された感情や変化（例：喜び、興奮、不安→安心、平常→悲しみなど）"
+  
+  // ===== 心理分析 =====
+  "psychological_analysis": {{
+    "mood_state": "neutral/positive/negative/anxious/relaxed/excited/tired",
+    "mood_description": "気分の詳細説明（例：穏やかだが少し疲れている）",
+    "emotion_changes": "感情の変化（例：最初は不安→後半は安心）"
   }},
-  "acoustic_features": {{
-    "average_loudness": 0.186,
-    "loudness_trend": "increasing/stable/decreasing",
-    "voice_stability": "安定/やや不安定/不安定",
-    "notable_patterns": ["観察された音声パターン"]
+  
+  // ===== 行動分析 =====
+  "behavioral_analysis": {{
+    "detected_activities": ["食事", "会話", "遊び"],
+    "behavior_pattern": "観察された行動の特徴（例：活発に遊んでいるが時々休憩）",
+    "situation_context": "状況の文脈（例：家族との夕食時、一人で宿題中、友達と外遊び）"
   }},
+  
+  // ===== 音響指標 =====
+  "acoustic_metrics": {{
+    // 基本統計
+    "speech_time_ratio": 0.65,
+    "average_loudness_db": -25.3,
+    "loudness_range": [-45.2, -12.1],
+    
+    // 変動性分析
+    "voice_stability_score": 0.82,
+    "pitch_variability": "monotone/normal/expressive",
+    "rhythm_regularity": 0.75,
+    
+    // 特徴的パターン
+    "dominant_patterns": [
+      {{"type": "繰り返し発話", "count": 3}},
+      {{"type": "笑い声", "frequency": "頻繁"}},
+      {{"type": "ため息", "detected": true}}
+    ]
+  }},
+  
+  // ===== 注意・検討事項 =====
   "key_observations": [
-    "時系列データから観察された重要な点"
-  ],
-  "detected_mood": "neutral/positive/negative/anxious/relaxed/excited/tired",
-  "detected_activities": ["推定される活動"],
-  "context_notes": "詳細な状況説明"
+    "要注意事項（例：急激な感情変化が見られた）",
+    "検討事項（例：疲労の兆候あり、休息が必要かもしれない）",
+    "気になる点（例：普段と異なる行動パターンを検出）"
+  ]
 }}
 ```
 
@@ -260,7 +285,7 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 - JSONのみを返す（説明や補足は一切不要）
 - すべてのフィールドは必須
 - vibe_scoreは必ず-100〜+100の整数値
-- confidence_scoreは0.0〜1.0の小数値
+- JSONコメント（//）は出力に含めない
 
     # ==================== 3. 分析の前提条件と制約（最重要） ====================
     
@@ -301,10 +326,12 @@ def generate_timeblock_prompt(transcription: Optional[str], sed_data: Optional[l
 - 早朝の活動: +20〜30（年齢により判断）
 - 深夜の活動: -20〜30（個人差を考慮）
 
-**confidence_scoreの決定基準:**
-- データの完全性（全モダリティが揃っている）: 0.8〜1.0
-- 部分的データ: 0.4〜0.8
-- 単一モダリティのみ: 0.2〜0.4
+**音響指標の解釈ガイド:**
+- speech_time_ratio: 発話時間の割合（0.0〜1.0）。0.7以上は活発、0.3以下は静か
+- average_loudness_db: 平均音量（dB）。通常-30〜-20dB程度
+- voice_stability_score: 声の安定性（0.0〜1.0）。0.8以上は安定、0.5以下は不安定
+- pitch_variability: 音程の変化。monotone=単調、normal=通常、expressive=表現豊か
+- rhythm_regularity: リズムの規則性（0.0〜1.0）。高いほど規則的な話し方
 """)
     
     # ==================== 5. メタ情報 ====================
