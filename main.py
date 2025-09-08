@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Vibe Aggregator(Prompt Generator) API | 心理グラフ生成用API
 https://api.hey-watch.me/vibe-aggregator

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Supabase Client for vibe_whisper and vibe_whisper_prompt tables
 """
