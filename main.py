@@ -397,8 +397,8 @@ async def generate_dashboard_summary(
         # vibe_scoreの平均値を計算（nullを除外）
         average_vibe = vibe_score_sum / vibe_score_count if vibe_score_count > 0 else None
         
-        # ========== 処理A: 既存のタイムライン生成処理 ==========
-        # タイムライン配列の作成
+        # ========== シンプル化されたタイムライン生成処理 ==========
+        # summaryとvibe_scoreのみを使用
         timeline = []
         total_vibe_score = 0
         valid_score_count = 0
@@ -407,8 +407,8 @@ async def generate_dashboard_summary(
         neutral_blocks = 0
         
         for block in processed_blocks:
-            # analysis_resultから重要な情報を抽出
-            analysis_result = block.get("analysis_result", {})
+            # summaryとvibe_scoreのみを取得（analysis_resultは使わない）
+            summary = block.get("summary", "")
             vibe_score = block.get("vibe_score")
             
             # スコアの統計
@@ -423,19 +423,12 @@ async def generate_dashboard_summary(
                 else:
                     neutral_blocks += 1
             
-            # タイムラインエントリの作成
+            # シンプルなタイムラインエントリの作成（summaryとvibe_scoreのみ）
             timeline_entry = {
                 "time_block": block["time_block"],
-                "summary": block.get("summary", ""),
-                "vibe_score": vibe_score,
-                "analysis_result": analysis_result
+                "summary": summary,
+                "vibe_score": vibe_score
             }
-            
-            # analysis_resultから重要な要素を抽出（存在する場合）
-            if isinstance(analysis_result, dict):
-                timeline_entry["key_emotions"] = analysis_result.get("emotions", [])
-                timeline_entry["activities"] = analysis_result.get("activities", [])
-                timeline_entry["concerns"] = analysis_result.get("concerns", [])
             
             timeline.append(timeline_entry)
         
@@ -517,93 +510,110 @@ async def generate_dashboard_summary(
 
 def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict, last_time_block: str) -> str:
     """
-    累積型の時系列データを基にChatGPT分析用プロンプトを生成
-    timeblock_endpoint.pyスタイルで、臨床心理士としての分析を依頼
+    シンプル化された累積型プロンプト生成
+    summaryとvibe_scoreのみを使用し、コンパクトに
     
     Args:
         device_id: デバイスID
         date: 日付
-        timeline: タイムブロックごとのデータリスト（時系列順）
+        timeline: タイムブロックごとのデータリスト（summaryとvibe_scoreのみ）
         statistics: 統計情報
         last_time_block: 最後に処理したタイムブロック
         
     Returns:
         str: ChatGPT用の累積評価プロンプト
     """
-    # タイムラインテキストの生成（時系列順）
+    # 時間帯の判定（timeblock_endpoint.py参考）
+    hour = int(last_time_block.split('-')[0])
+    minute = int(last_time_block.split('-')[1])
+    
+    time_context = ""
+    if 5 <= hour < 9:
+        time_context = "早朝"
+    elif 9 <= hour < 12:
+        time_context = "午前"
+    elif 12 <= hour < 14:
+        time_context = "昼"
+    elif 14 <= hour < 17:
+        time_context = "午後"
+    elif 17 <= hour < 20:
+        time_context = "夕方"
+    elif 20 <= hour < 23:
+        time_context = "夜"
+    else:
+        time_context = "深夜"
+    
+    # タイムラインテキストの生成（シンプル版）
     timeline_texts = []
     for entry in timeline:
         time = entry["time_block"].replace("-", ":")
-        summary = entry.get("summary", "データなし")
-        score = entry.get("vibe_score", "N/A")
+        summary = entry.get("summary", "")
+        score = entry.get("vibe_score")
         
-        if summary and summary != "データなし":
-            timeline_texts.append(f"[{time}] スコア:{score} | {summary}")
+        # データがある場合のみ追加
+        if summary and summary.strip():
+            # スコアを見やすく表示（正の値は+、負の値は-、nullは--）
+            score_str = f"+{score}" if score and score > 0 else str(score) if score else "--"
+            timeline_texts.append(f"[{time}] {score_str:>4} | {summary}")
     
     timeline_text = "\n".join(timeline_texts) if timeline_texts else "記録されたデータがありません。"
     
     # 終了時刻の算出
-    end_hour = int(last_time_block.split('-')[0])
-    end_minute = int(last_time_block.split('-')[1]) + 30
+    end_minute = minute + 30
+    end_hour = hour
     if end_minute >= 60:
         end_hour += 1
         end_minute = 0
     end_time = f"{end_hour:02d}:{end_minute:02d}"
     
-    # プロンプトの生成（timeblock_endpoint.pyスタイル）
+    # ==================== timeblock_endpoint.pyスタイルのプロンプト ====================
     prompt = f"""📊 累積心理状態分析タスク
 
-あなたは「時系列データから心理状態の変化を分析することに特化した臨床心理士」です。
-現在時刻（{last_time_block.replace('-', ':')}）までの累積データを基に、その時点での総合的な心理状態を評価してください。
+あなたは「時系列の要約データから心理状態の変化を分析することに特化した臨床心理士」です。
+観測データは1日48回、30分ごとのブロックに区切られています。
+現在時刻（{hour:02d}:{minute:02d}）までの要約とスコアを基に、その時点での総合的な心理状態を評価してください。
 
-## 出力形式（必須）:
+## ==================== 出力形式（必須） ====================
 ```json
 {{
-  "current_time": "{last_time_block.replace('-', ':')}",
-  "time_range": "00:00-{end_time}",
-  "cumulative_evaluation": "この時点までの総合的な心理状態を2-3文で簡潔に記載",
-  "key_patterns": [
-    "観察された重要なパターン1",
-    "観察された重要なパターン2",
-    "観察された重要なパターン3"
-  ],
+  "current_time": "{hour:02d}:{minute:02d}",
+  "time_context": "{time_context}",
+  "cumulative_evaluation": "この時点までの総合的な心理状態を2-3文で簡潔に記載。朝からの流れと現在の状態を含む。",
   "mood_trajectory": "positive_trend/negative_trend/stable/fluctuating",
-  "attention_points": [
-    "注目すべき点や懸念事項（あれば）"
-  ],
-  "current_state_score": 75
+  "current_state_score": 0
 }}
 ```
 
-**厳格ルール:**
-- JSONのみを返す（説明や補足は一切不要）
-- cumulative_evaluationは必ず2-3文で簡潔に
-- current_state_scoreは-100〜+100の整数値
+## ==================== 厳格ルール ====================
+- **JSONのみを返す**（説明や補足は一切不要）
+- **cumulative_evaluationは必ず2-3文**で簡潔に記載
+- **current_state_scoreは-100〜+100の整数値**
 - この時点までのデータのみで評価（未来のデータは考慮しない）
+- 観測対象者の年齢・性別は不明として、決めつけない
 
-## 分析対象データ
+## ==================== 分析対象データ ====================
 
-### 基本情報
-- デバイスID: {device_id}
+### メタ情報
 - 日付: {date}
-- 分析時刻: {last_time_block.replace('-', ':')}
-- 処理済みブロック数: {statistics.get('total_blocks', 0)}個
+- 現在時刻: {hour:02d}:{minute:02d}（{time_context}）
+- 分析範囲: 00:00〜{end_time}
+- データ数: {statistics.get('total_blocks', 0)}ブロック
 
-### 現時点までの統計
-- 平均感情スコア: {statistics.get('avg_vibe_score', 'N/A')}
-- ポジティブな時間帯: {statistics.get('positive_blocks', 0)}ブロック
-- ネガティブな時間帯: {statistics.get('negative_blocks', 0)}ブロック
-- ニュートラルな時間帯: {statistics.get('neutral_blocks', 0)}ブロック
+### 統計サマリー
+- 平均スコア: {statistics.get('avg_vibe_score', 0):.1f}
+- ポジティブ（>20）: {statistics.get('positive_blocks', 0)}回
+- ネガティブ（<-20）: {statistics.get('negative_blocks', 0)}回
+- ニュートラル（-20〜20）: {statistics.get('neutral_blocks', 0)}回
 
-### 時系列データ（00:00から{last_time_block.replace('-', ':')}まで）
+### 時系列サマリー（要約とスコアのみ）
 {timeline_text}
 
-## 分析の観点
-1. **現時点までの心理的軌跡**: 朝からの感情変化のパターンを要約
-2. **特徴的な変化点**: 大きな感情の変化があったタイミングとその内容
-3. **現在の状態**: {last_time_block.replace('-', ':')}時点での心理状態の評価
+## ==================== 分析の観点 ====================
+1. **朝からの流れ**: 時間帯ごとの変化パターン
+2. **現在の状態**: {hour:02d}:{minute:02d}時点での心理状態
+3. **全体的な傾向**: スコアの推移から見る心理的軌跡
 
-重要: あなたは{last_time_block.replace('-', ':')}の時点にいると仮定し、その時点までのデータのみで評価を行ってください。"""
+重要: データから直接観察できる事実を重視し、推測は最小限に留めてください。"""
     
     return prompt
 
