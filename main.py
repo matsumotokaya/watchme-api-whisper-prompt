@@ -325,8 +325,9 @@ async def generate_dashboard_summary(
     
     処理内容:
     1. dashboardテーブルから該当日のstatus='completed'のレコードを取得
-    2. 各タイムブロックのanalysis_resultを時系列順に統合
-    3. 統合データをdashboard_summaryテーブルにUPSERT
+    2. 各タイムブロックのanalysis_resultを時系列順に統合（処理A）
+    3. vibe_scoreから48要素の配列を生成（処理B）
+    4. 統合データをdashboard_summaryテーブルにUPSERT
     """
     try:
         # 日付形式の検証
@@ -366,6 +367,37 @@ async def generate_dashboard_summary(
         # 最後のタイムブロックを取得
         last_time_block = processed_blocks[-1]["time_block"] if processed_blocks else None
         
+        # ========== 処理B: vibe_scores配列の生成（新規追加） ==========
+        # 48要素の配列を初期化（全てnull）
+        vibe_scores_array = [None] * 48
+        
+        # 時間ブロックのマッピング辞書を作成
+        time_block_to_index = {}
+        for hour in range(24):
+            for minute_idx, minute in enumerate(["00", "30"]):
+                time_block = f"{hour:02d}-{minute}"
+                index = hour * 2 + minute_idx
+                time_block_to_index[time_block] = index
+        
+        # vibe_scoreデータを配列の適切な位置に配置
+        vibe_score_sum = 0
+        vibe_score_count = 0
+        
+        for block in processed_blocks:
+            time_block = block.get("time_block")
+            vibe_score = block.get("vibe_score")
+            
+            # 対応するインデックスにvibe_scoreを設定
+            if time_block in time_block_to_index and vibe_score is not None:
+                index = time_block_to_index[time_block]
+                vibe_scores_array[index] = vibe_score
+                vibe_score_sum += vibe_score
+                vibe_score_count += 1
+        
+        # vibe_scoreの平均値を計算（nullを除外）
+        average_vibe = vibe_score_sum / vibe_score_count if vibe_score_count > 0 else None
+        
+        # ========== 処理A: 既存のタイムライン生成処理 ==========
         # タイムライン配列の作成
         timeline = []
         total_vibe_score = 0
@@ -407,7 +439,7 @@ async def generate_dashboard_summary(
             
             timeline.append(timeline_entry)
         
-        # 統計情報の計算
+        # 統計情報の計算（既存処理用）
         avg_vibe_score = total_vibe_score / valid_score_count if valid_score_count > 0 else None
         
         # 統合プロンプトの生成
@@ -448,6 +480,8 @@ async def generate_dashboard_summary(
             "device_id": device_id,
             "date": date,
             "integrated_data": integrated_data,
+            "vibe_scores": vibe_scores_array,  # 新規追加: 48要素の配列
+            "average_vibe": average_vibe,       # 新規追加: 平均値
             "processed_count": processed_count,
             "last_time_block": last_time_block,
             "updated_at": datetime.now().isoformat()
@@ -466,6 +500,8 @@ async def generate_dashboard_summary(
             "date": date,
             "processed_count": processed_count,
             "last_time_block": last_time_block,
+            "vibe_scores_count": vibe_score_count,  # 新規追加: 有効なスコア数
+            "average_vibe": average_vibe,           # 新規追加: 平均値
             "statistics": integrated_data["statistics"]
         }
         
