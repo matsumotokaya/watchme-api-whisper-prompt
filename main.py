@@ -450,34 +450,28 @@ async def generate_dashboard_summary(
             last_time_block=last_time_block
         )
         
-        # 統合データの構築
-        integrated_data = {
-            "device_id": device_id,
-            "date": date,
-            "time_range": f"00:00-{last_time_block.replace('-', ':')}",
-            "total_blocks": 48,  # 1日の総ブロック数
-            "processed_blocks": processed_count,
-            "timeline": timeline,
-            "daily_summary_prompt": daily_summary_prompt,
+        # 最小限の統合データ（統計情報のみ）
+        minimal_integrated_data = {
             "statistics": {
                 "avg_vibe_score": avg_vibe_score,
                 "positive_blocks": positive_blocks,
                 "negative_blocks": negative_blocks,
                 "neutral_blocks": neutral_blocks,
-                "valid_score_count": valid_score_count
+                "processed_count": processed_count
             },
-            "generated_at": datetime.now().isoformat()
+            "last_updated": datetime.now().isoformat()
         }
         
-        # dashboard_summaryテーブルにUPSERT
+        # dashboard_summaryテーブルにUPSERT（大幅に削減）
         upsert_data = {
             "device_id": device_id,
             "date": date,
-            "integrated_data": integrated_data,
-            "vibe_scores": vibe_scores_array,  # 新規追加: 48要素の配列
-            "average_vibe": average_vibe,       # 新規追加: 平均値
+            "integrated_data": minimal_integrated_data,  # 統計情報のみ
+            "vibe_scores": vibe_scores_array,  # グラフ描画用（48要素）
+            "average_vibe": average_vibe,
             "processed_count": processed_count,
             "last_time_block": last_time_block,
+            "daily_summary_prompt": daily_summary_prompt,  # プロンプトは保存
             "updated_at": datetime.now().isoformat()
         }
         
