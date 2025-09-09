@@ -442,7 +442,7 @@ async def generate_dashboard_summary(
         # 統計情報の計算（既存処理用）
         avg_vibe_score = total_vibe_score / valid_score_count if valid_score_count > 0 else None
         
-        # 統合プロンプトの生成
+        # 統合プロンプトの生成（累積型、last_time_blockパラメータを追加）
         daily_summary_prompt = generate_daily_summary_prompt(
             device_id=device_id,
             date=date,
@@ -453,7 +453,8 @@ async def generate_dashboard_summary(
                 "negative_blocks": negative_blocks,
                 "neutral_blocks": neutral_blocks,
                 "total_blocks": processed_count
-            }
+            },
+            last_time_block=last_time_block
         )
         
         # 統合データの構築
@@ -514,20 +515,22 @@ async def generate_dashboard_summary(
         raise HTTPException(status_code=500, detail=f"サーバーエラー: {str(e)}")
 
 
-def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict) -> str:
+def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict, last_time_block: str) -> str:
     """
-    1日分のタイムブロックデータを統合プロンプトに変換
+    累積型の時系列データを基にChatGPT分析用プロンプトを生成
+    timeblock_endpoint.pyスタイルで、臨床心理士としての分析を依頼
     
     Args:
         device_id: デバイスID
         date: 日付
-        timeline: タイムブロックごとのデータリスト
+        timeline: タイムブロックごとのデータリスト（時系列順）
         statistics: 統計情報
+        last_time_block: 最後に処理したタイムブロック
         
     Returns:
-        str: ChatGPT用の統合プロンプト
+        str: ChatGPT用の累積評価プロンプト
     """
-    # タイムラインテキストの生成
+    # タイムラインテキストの生成（時系列順）
     timeline_texts = []
     for entry in timeline:
         time = entry["time_block"].replace("-", ":")
@@ -535,51 +538,72 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
         score = entry.get("vibe_score", "N/A")
         
         if summary and summary != "データなし":
-            timeline_texts.append(f"【{time}】(スコア: {score})\n{summary}")
+            timeline_texts.append(f"[{time}] スコア:{score} | {summary}")
     
-    timeline_text = "\n\n".join(timeline_texts) if timeline_texts else "記録されたデータがありません。"
+    timeline_text = "\n".join(timeline_texts) if timeline_texts else "記録されたデータがありません。"
     
-    # プロンプトの生成
-    prompt = f"""# 1日の心理状態統合分析
+    # 終了時刻の算出
+    end_hour = int(last_time_block.split('-')[0])
+    end_minute = int(last_time_block.split('-')[1]) + 30
+    if end_minute >= 60:
+        end_hour += 1
+        end_minute = 0
+    end_time = f"{end_hour:02d}:{end_minute:02d}"
+    
+    # プロンプトの生成（timeblock_endpoint.pyスタイル）
+    prompt = f"""📊 累積心理状態分析タスク
 
-## 基本情報
+あなたは「時系列データから心理状態の変化を分析することに特化した臨床心理士」です。
+現在時刻（{last_time_block.replace('-', ':')}）までの累積データを基に、その時点での総合的な心理状態を評価してください。
+
+## 出力形式（必須）:
+```json
+{{
+  "current_time": "{last_time_block.replace('-', ':')}",
+  "time_range": "00:00-{end_time}",
+  "cumulative_evaluation": "この時点までの総合的な心理状態を2-3文で簡潔に記載",
+  "key_patterns": [
+    "観察された重要なパターン1",
+    "観察された重要なパターン2",
+    "観察された重要なパターン3"
+  ],
+  "mood_trajectory": "positive_trend/negative_trend/stable/fluctuating",
+  "attention_points": [
+    "注目すべき点や懸念事項（あれば）"
+  ],
+  "current_state_score": 75
+}}
+```
+
+**厳格ルール:**
+- JSONのみを返す（説明や補足は一切不要）
+- cumulative_evaluationは必ず2-3文で簡潔に
+- current_state_scoreは-100〜+100の整数値
+- この時点までのデータのみで評価（未来のデータは考慮しない）
+
+## 分析対象データ
+
+### 基本情報
 - デバイスID: {device_id}
 - 日付: {date}
-- 処理済みタイムブロック: {statistics.get('total_blocks', 0)}個
+- 分析時刻: {last_time_block.replace('-', ':')}
+- 処理済みブロック数: {statistics.get('total_blocks', 0)}個
 
-## 時系列データ
-{timeline_text}
-
-## 統計サマリー
+### 現時点までの統計
 - 平均感情スコア: {statistics.get('avg_vibe_score', 'N/A')}
 - ポジティブな時間帯: {statistics.get('positive_blocks', 0)}ブロック
 - ネガティブな時間帯: {statistics.get('negative_blocks', 0)}ブロック
 - ニュートラルな時間帯: {statistics.get('neutral_blocks', 0)}ブロック
 
-## 分析依頼
-上記の1日の時系列データを基に、以下の観点で統合的な分析を行ってください：
+### 時系列データ（00:00から{last_time_block.replace('-', ':')}まで）
+{timeline_text}
 
-1. **1日の全体的な心理的傾向**
-   - 感情の起伏パターン
-   - 特徴的な時間帯
-   - 全体的な心理状態の評価
+## 分析の観点
+1. **現時点までの心理的軌跡**: 朝からの感情変化のパターンを要約
+2. **特徴的な変化点**: 大きな感情の変化があったタイミングとその内容
+3. **現在の状態**: {last_time_block.replace('-', ':')}時点での心理状態の評価
 
-2. **重要なイベントや転換点**
-   - 感情が大きく変化したタイミング
-   - ポジティブ/ネガティブなピーク
-   - 注目すべき出来事
-
-3. **パターンと洞察**
-   - 繰り返し現れるテーマ
-   - 時間帯による傾向
-   - 潜在的な課題や強み
-
-4. **総合評価とアドバイス**
-   - 1日を通しての心理的健康度
-   - 改善のための具体的な提案
-   - ポジティブな要素の強化方法
-
-JSONフォーマットで、構造化された分析結果を提供してください。"""
+重要: あなたは{last_time_block.replace('-', ':')}の時点にいると仮定し、その時点までのデータのみで評価を行ってください。"""
     
     return prompt
 
