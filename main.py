@@ -325,9 +325,9 @@ async def generate_dashboard_summary(
     
     処理内容:
     1. dashboardテーブルから該当日のstatus='completed'のレコードを取得
-    2. 各タイムブロックのanalysis_resultを時系列順に統合（処理A）
-    3. vibe_scoreから48要素の配列を生成（処理B）
-    4. 統合データをdashboard_summaryテーブルにUPSERT
+    2. summaryとvibe_scoreから累積型プロンプトを生成
+    3. vibe_scoreから48要素の配列を生成（グラフ描画用）
+    4. プロンプトをdashboard_summaryテーブルのpromptカラムに保存
     """
     try:
         # 日付形式の検証
@@ -450,28 +450,15 @@ async def generate_dashboard_summary(
             last_time_block=last_time_block
         )
         
-        # 最小限の統合データ（統計情報のみ）
-        minimal_integrated_data = {
-            "statistics": {
-                "avg_vibe_score": avg_vibe_score,
-                "positive_blocks": positive_blocks,
-                "negative_blocks": negative_blocks,
-                "neutral_blocks": neutral_blocks,
-                "processed_count": processed_count
-            },
-            "last_updated": datetime.now().isoformat()
-        }
-        
-        # dashboard_summaryテーブルにUPSERT（大幅に削減）
+        # dashboard_summaryテーブルにUPSERT
         upsert_data = {
             "device_id": device_id,
             "date": date,
-            "integrated_data": minimal_integrated_data,  # 統計情報のみ
+            "prompt": daily_summary_prompt,  # dashboardのsummaryとvibe_scoreから生成したプロンプト
             "vibe_scores": vibe_scores_array,  # グラフ描画用（48要素）
             "average_vibe": average_vibe,
             "processed_count": processed_count,
             "last_time_block": last_time_block,
-            "daily_summary_prompt": daily_summary_prompt,  # プロンプトは保存
             "updated_at": datetime.now().isoformat()
         }
         
