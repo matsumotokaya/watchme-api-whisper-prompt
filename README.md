@@ -54,15 +54,23 @@ git push origin main
 
 ---
 
-## ✅ 最新アップデート (2025-09-08)
+## ✅ 最新アップデート (2025-09-10)
 
-**🆕 ダッシュボード統合機能**: dashboardテーブルの1日分の分析結果を統合
-- 新エンドポイント `/generate-dashboard-summary` を追加
-- dashboardテーブルのstatus='completed'データを時系列で統合
-- analysis_result、summary、vibe_scoreを集約して統計情報を生成
-- ChatGPT用の統合プロンプトを自動生成
-- dashboard_summaryテーブルにUPSERT（同じ日付のデータは自動更新）
-- リアルタイムで最新の1日サマリーを提供
+**🔄 /generate-dashboard-summary エンドポイントの大幅改善**:
+- **累積型評価システムに変更**: その時点までのデータのみで総合評価を生成
+- **データ構造のシンプル化**: 
+  - `integrated_data`カラムを廃止し、`prompt`カラムに変更
+  - summaryとvibe_scoreのみを使用するコンパクトな設計
+  - 余計なデータ（analysis_result等）を完全に除外
+- **プロンプト生成の改善**:
+  - timeblock_endpoint.pyスタイルの構成を採用
+  - 臨床心理士としての分析依頼形式
+  - 2-3文での簡潔な評価を生成
+- **データサイズ50%以上削減**: 効率的なデータ保存を実現
+
+### 過去のアップデート (2025-09-08)
+
+**🆕 ダッシュボード統合機能**: dashboardテーブルの1日分の分析結果を統合（初期バージョン）
 
 ### 過去のアップデート (2025-09-07)
 
@@ -191,7 +199,7 @@ curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?dev
 | `GET /health` | ヘルスチェック | - | - | - |
 | `GET /generate-mood-prompt-supabase` | 1日分統合版（48タイムブロック） | vibe_whisper_promptテーブル | vibe_whisper | - |
 | `GET /generate-timeblock-prompt` | タイムブロック単位の高精度プロンプト生成 | dashboardテーブル（promptカラム） | vibe_whisper + behavior_yamnet + emotion_opensmile + subjects | ✅ 各テーブルのstatusをcompletedに更新 |
-| `GET /generate-dashboard-summary` | 1日分のダッシュボード分析結果統合 | dashboard_summaryテーブル | dashboard (status='completed') | - |
+| `GET /generate-dashboard-summary` | 累積型心理状態評価（summaryとvibe_scoreのみ使用） | dashboard_summaryテーブル（promptカラム） | dashboard (status='completed') | - |
 
 ### ✅ 実装完了機能
 
@@ -216,20 +224,26 @@ curl "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?dev
   - データが存在する場合のみ更新（欠損データはスキップ）
 - **注**: V1エンドポイント（Whisperのみ）は削除済み。V3（OpenSMILE統合版）に統一
 
-#### ダッシュボード統合処理（/generate-dashboard-summary）（新機能 2025-09-08）
-- **1日分のダッシュボード分析結果を統合**
+#### ダッシュボード統合処理（/generate-dashboard-summary）（更新 2025-09-10）
+- **累積型の心理状態評価システム**
 - **データソース**: dashboardテーブル（status='completed'のレコード）
-- **統合内容**:
-  - 各タイムブロックのanalysis_result、summary、vibe_scoreを集約
-  - 時系列順にタイムラインを構築
-  - 統計情報の自動計算（平均スコア、ポジティブ/ネガティブ/ニュートラル分布）
+- **使用データ（シンプル化）**:
+  - 各タイムブロックの`summary`（要約文）
+  - 各タイムブロックの`vibe_score`（感情スコア）
+  - ※analysis_result等の余計なデータは使用しない
+- **プロンプト生成**:
+  - その時点までの累積データで評価（例：14:30時点では00:00〜14:30のデータ）
+  - timeblock_endpoint.pyスタイルの構造化されたプロンプト
+  - 2-3文での簡潔な総合評価
 - **出力先**: dashboard_summaryテーブル
-  - integrated_dataカラムにJSON形式で全データを保存
+  - `prompt`カラム: 生成されたChatGPT用プロンプト
+  - `vibe_scores`カラム: 48要素の配列（グラフ描画用）
+  - `average_vibe`カラム: 平均感情スコア
   - 同じdevice_id + dateの組み合わせは常に最新版に更新（UPSERT）
 - **利用シーン**:
-  - ユーザーが1日の総合的な心理状態を確認
-  - リアルタイムで最新の統合サマリーを提供
-  - 時間経過とともに自動的に更新される動的なレポート
+  - その時点での累積的な心理状態の評価
+  - 新しいタイムブロックが追加されるたびに上書き更新
+  - コンパクトで効率的なデータ保存
 
 ### 🔄 WatchMeエコシステムでの位置づけ
 
@@ -248,17 +262,18 @@ emotion_opensmile ┘      ↓
                      各テーブルのstatus → "completed"
 ```
 
-#### ダッシュボード統合フロー（新）
+#### ダッシュボード統合フロー（更新 2025-09-10）
 ```
-dashboard (completed) → [このAPI] → dashboard_summary (integrated_data)
-                            ↑
-                    統合プロンプト生成・統計計算
+dashboard (summary + vibe_score) → [このAPI] → dashboard_summary (prompt)
+                                        ↑
+                            累積型評価プロンプト生成
+                            （その時点までのデータのみ）
 ```
 
 **このAPIの役割**: 
 - 1日分統合: vibe_whisperテーブルから読み込み → プロンプト生成 → vibe_whisper_promptテーブルに保存
 - タイムブロック処理: vibe_whisper + behavior_yamnet + emotion_opensmileから読み込み → 高精度プロンプト生成 → dashboardテーブルに保存 → 各データソースのstatusを更新
-- ダッシュボード統合: dashboardテーブル（completed）から読み込み → 統合データ生成 → dashboard_summaryテーブルに保存
+- ダッシュボード統合: dashboardテーブル（completed）のsummaryとvibe_scoreから → 累積型評価プロンプト生成 → dashboard_summaryテーブルのpromptカラムに保存
 
 ## 📁 データ構造
 
@@ -323,14 +338,14 @@ dashboard (completed) → [このAPI] → dashboard_summary (integrated_data)
 - `created_at`: 作成日時
 - `updated_at`: 更新日時
 
-#### dashboard_summaryテーブル（1日分統合・新規追加）
+#### dashboard_summaryテーブル（更新 2025-09-10）
 - `device_id`: デバイス識別子
 - `date`: 日付（YYYY-MM-DD）
-- `integrated_data`: 統合データ（JSONB形式）
-  - `timeline`: 時系列タイムブロックデータ
-  - `statistics`: 統計情報（平均スコア、分布など）
-  - `daily_summary_prompt`: ChatGPT用統合プロンプト
-  - `time_range`: 処理された時間範囲
+- `prompt`: 生成されたChatGPT用プロンプト（TEXT形式）※旧integrated_dataから変更
+  - summaryとvibe_scoreから生成した累積型評価プロンプト
+  - その時点までのデータのみを含む
+- `vibe_scores`: 感情スコア配列（48要素、グラフ描画用）
+- `average_vibe`: 平均感情スコア
 - `processed_count`: 処理済みタイムブロック数
 - `last_time_block`: 最後に処理されたタイムブロック
 - `created_at`: 作成日時
