@@ -477,7 +477,13 @@ async def generate_dashboard_summary(
             "last_time_block": last_time_block,
             "vibe_scores_count": vibe_score_count,  # 新規追加: 有効なスコア数
             "average_vibe": average_vibe,           # 新規追加: 平均値
-            "statistics": integrated_data["statistics"]
+            "statistics": {
+                "avg_vibe_score": avg_vibe_score,
+                "positive_blocks": positive_blocks,
+                "negative_blocks": negative_blocks,
+                "neutral_blocks": neutral_blocks,
+                "valid_score_count": valid_score_count
+            }
         }
         
     except HTTPException:
