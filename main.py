@@ -602,11 +602,11 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
     # 祝日・連休情報を取得
     holiday_info = get_holiday_context(date)
     
-    # 日付コンテキストの生成
+    # 日付コンテキストの生成（祝日を明示的に表現）
     if holiday_info['is_holiday']:
-        day_context = f"{holiday_info['holiday_name']}"
+        day_context = f"祝日（{holiday_info['holiday_name']}）"
         if holiday_info['consecutive_context']:
-            day_context += f"（{holiday_info['consecutive_context']}）"
+            day_context += f"・{holiday_info['consecutive_context']}"
     elif holiday_info['is_weekend']:
         day_context = weekday_info['day_type']
         if holiday_info['consecutive_context']:
@@ -674,6 +674,8 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
 日付: {date}（{weekday_info['weekday']}、{day_context}）
 季節: {season}、地域: 日本
 分析範囲: **1日全体（00:00〜{hour:02d}:{minute:02d}）の記録**
+
+{'【注意】本日は祝日のため、学校・幼稚園等の教育機関は休業です。観測場所は自宅または外出先と推測してください。' if holiday_info['is_holiday'] else ''}
 
 録音される音声には本人だけでなく、周囲の人物（家族、友人、テレビ等）の声も含まれます。
 観測対象者のプロファイルと発話内容に乖離がある場合は、周囲の人物の発話である可能性を考慮してください。
