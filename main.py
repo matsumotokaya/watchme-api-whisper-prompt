@@ -265,7 +265,10 @@ async def generate_mood_prompt_supabase(
 # ===============================
 from timeblock_endpoint import (
     process_timeblock_v2,
-    process_and_save_to_dashboard
+    process_and_save_to_dashboard,
+    get_weekday_info,
+    get_season,
+    generate_age_context
 )
 
 @app.get("/generate-timeblock-prompt")
@@ -435,7 +438,28 @@ async def generate_dashboard_summary(
         # 統計情報の計算（既存処理用）
         avg_vibe_score = total_vibe_score / valid_score_count if valid_score_count > 0 else None
         
-        # 統合プロンプトの生成（累積型、last_time_blockパラメータを追加）
+        # 観測対象者情報を取得（devicesテーブルとsubjectsテーブルを結合）
+        subject_info = None
+        try:
+            # devicesテーブルからsubject_idを取得
+            device_response = supabase.table("devices").select("subject_id").eq(
+                "device_id", device_id
+            ).single().execute()
+            
+            if device_response.data and device_response.data.get("subject_id"):
+                subject_id = device_response.data["subject_id"]
+                # subjectsテーブルから情報を取得
+                subject_response = supabase.table("subjects").select("*").eq(
+                    "subject_id", subject_id
+                ).single().execute()
+                
+                if subject_response.data:
+                    subject_info = subject_response.data
+        except Exception as e:
+            # エラーが発生しても処理を継続（subject_info = Noneのまま）
+            print(f"観測対象者情報の取得に失敗しました（処理は継続）: {e}")
+        
+        # 統合プロンプトの生成（累積型、subject_info追加）
         daily_summary_prompt = generate_daily_summary_prompt(
             device_id=device_id,
             date=date,
@@ -447,7 +471,8 @@ async def generate_dashboard_summary(
                 "neutral_blocks": neutral_blocks,
                 "total_blocks": processed_count
             },
-            last_time_block=last_time_block
+            last_time_block=last_time_block,
+            subject_info=subject_info
         )
         
         # dashboard_summaryテーブルにUPSERT
@@ -495,10 +520,9 @@ async def generate_dashboard_summary(
         raise HTTPException(status_code=500, detail=f"サーバーエラー: {str(e)}")
 
 
-def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict, last_time_block: str) -> str:
+def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict, last_time_block: str, subject_info: Optional[Dict] = None) -> str:
     """
-    シンプル化された累積型プロンプト生成
-    summaryとvibe_scoreのみを使用し、コンパクトに
+    改善版：コンテキストを活用し、実データから得られる価値ある情報に集中
     
     Args:
         device_id: デバイスID
@@ -506,14 +530,23 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
         timeline: タイムブロックごとのデータリスト（summaryとvibe_scoreのみ）
         statistics: 統計情報
         last_time_block: 最後に処理したタイムブロック
+        subject_info: 観測対象者情報（オプション）
         
     Returns:
         str: ChatGPT用の累積評価プロンプト
     """
-    # 時間帯の判定（timeblock_endpoint.py参考）
+    # 時間・曜日・季節のコンテキスト取得
     hour = int(last_time_block.split('-')[0])
     minute = int(last_time_block.split('-')[1])
     
+    # 曜日情報と季節を取得（timeblock_endpointから流用）
+    weekday_info = get_weekday_info(date)
+    season = get_season(int(date.split('-')[1]))
+    
+    # 観測対象者のコンテキスト
+    subject_context = generate_age_context(subject_info) if subject_info else "観測対象者情報：不明"
+    
+    # 時間帯の判定
     time_context = ""
     if 5 <= hour < 9:
         time_context = "早朝"
@@ -530,20 +563,21 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
     else:
         time_context = "深夜"
     
-    # タイムラインテキストの生成（シンプル版）
+    # 意味のあるタイムラインテキストの生成（自明な内容を除外）
     timeline_texts = []
+    trivial_patterns = ["静か", "無言", "発話なし", "データなし", "睡眠", "就寝", "起床前", "活動なし"]
+    
     for entry in timeline:
         time = entry["time_block"].replace("-", ":")
-        summary = entry.get("summary", "")
+        summary = entry.get("summary", "").strip()
         score = entry.get("vibe_score")
         
-        # データがある場合のみ追加
-        if summary and summary.strip():
-            # スコアを見やすく表示（正の値は+、負の値は-、nullは--）
-            score_str = f"+{score}" if score and score > 0 else str(score) if score else "--"
+        # summaryに実質的な内容がある場合のみ追加
+        if summary and not any(pattern in summary for pattern in trivial_patterns):
+            score_str = f"+{score}" if score and score > 0 else str(score) if score else "0"
             timeline_texts.append(f"[{time}] {score_str:>4} | {summary}")
     
-    timeline_text = "\n".join(timeline_texts) if timeline_texts else "記録されたデータがありません。"
+    timeline_text = "\n".join(timeline_texts) if timeline_texts else "有意なデータが記録されていません。"
     
     # 終了時刻の算出
     end_minute = minute + 30
@@ -553,54 +587,53 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
         end_minute = 0
     end_time = f"{end_hour:02d}:{end_minute:02d}"
     
-    # ==================== timeblock_endpoint.pyスタイルのプロンプト ====================
-    prompt = f"""📊 累積心理状態分析タスク
+    # ==================== 改善版プロンプト：コンテキスト重視、価値ある情報に集中 ====================
+    prompt = f"""## 1日の活動分析タスク
 
-あなたは「時系列の要約データから心理状態の変化を分析することに特化した臨床心理士」です。
-観測データは1日48回、30分ごとのブロックに区切られています。
-現在時刻（{hour:02d}:{minute:02d}）までの要約とスコアを基に、その時点での総合的な心理状態を評価してください。
+{date}（{weekday_info['weekday']}、{weekday_info['day_type']}）の観測データから、
+実際の発話内容と感情スコアに基づいて、注目すべき出来事と心理状態を分析してください。
 
-## ==================== 出力形式（必須） ====================
+### 観測コンテキスト
+- 観測対象者: {subject_context}
+- 日付: {date}（{weekday_info['weekday']}）
+- 季節: {season}
+- 地域: 日本
+- 現在時刻: {hour:02d}:{minute:02d}までのデータ
+- データ数: {statistics.get('total_blocks', 0)}ブロック（各30分）
+
+### 実際の観測データ
+{timeline_text}
+
+### 出力形式（必須）
 ```json
 {{
   "current_time": "{hour:02d}:{minute:02d}",
   "time_context": "{time_context}",
-  "cumulative_evaluation": "この時点までの総合的な心理状態を2-3文で簡潔に記載。朝からの流れと現在の状態を含む。",
+  "cumulative_evaluation": "実際の発話から読み取れる具体的な感情・出来事・心理変化を2-3文で記載",
   "mood_trajectory": "positive_trend/negative_trend/stable/fluctuating",
   "current_state_score": 0
 }}
 ```
 
-## ==================== 厳格ルール ====================
-- **JSONのみを返す**（説明や補足は一切不要）
-- **cumulative_evaluationは必ず2-3文**で簡潔に記載
-- **current_state_scoreは-100〜+100の整数値**
-- この時点までのデータのみで評価（未来のデータは考慮しない）
-- 観測対象者の年齢・性別は不明として、決めつけない
+### 分析の重要指針
 
-## ==================== 分析対象データ ====================
+**価値ある情報に集中する:**
+- ✅ 発話内容から読み取れる具体的な感情（楽しい、ストレス、不安、興奮）
+- ✅ 実際の出来事（友人との会話、仕事の話題、家族との時間）
+- ✅ 心理状態の変化（朝は元気→午後に疲れ、イライラ→落ち着いた等）
+- ✅ 特徴的な行動パターン（頻繁な笑い、ため息、独り言等）
 
-### メタ情報
-- 日付: {date}
-- 現在時刻: {hour:02d}:{minute:02d}（{time_context}）
-- 分析範囲: 00:00〜{end_time}
-- データ数: {statistics.get('total_blocks', 0)}ブロック
+**記載不要な情報:**
+- ❌ 「深夜から朝にかけて睡眠」のような自明な事実
+- ❌ 「静かだった」「無言だった」などデータ欠如の説明
+- ❌ 時間帯から当然推測される一般的な行動
 
-### 統計サマリー
-- 平均スコア: {statistics.get('avg_vibe_score', 0):.1f}
-- ポジティブ（>20）: {statistics.get('positive_blocks', 0)}回
-- ネガティブ（<-20）: {statistics.get('negative_blocks', 0)}回
-- ニュートラル（-20〜20）: {statistics.get('neutral_blocks', 0)}回
+**コンテキストの活用:**
+- 観測対象者の年齢・特性を考慮（子供なら遊びの文脈、大人なら仕事の文脈等）
+- 曜日の特性（平日なら仕事/学校、週末なら休息/レジャー）
+- 季節の影響（夏なら暑さへの言及、冬なら寒さへの反応等）
 
-### 時系列サマリー（要約とスコアのみ）
-{timeline_text}
-
-## ==================== 分析の観点 ====================
-1. **朝からの流れ**: 時間帯ごとの変化パターン
-2. **現在の状態**: {hour:02d}:{minute:02d}時点での心理状態
-3. **全体的な傾向**: スコアの推移から見る心理的軌跡
-
-重要: データから直接観察できる事実を重視し、推測は最小限に留めてください。"""
+**JSONのみを返す**（説明や補足は一切不要）"""
     
     return prompt
 
