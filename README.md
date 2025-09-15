@@ -135,36 +135,38 @@ pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8009 --reload
 ```
 
-### 基本的な使用方法
+## 📡 APIエンドポイント
 
-#### 1日分統合処理
-```bash
-# 外部URL（本番環境）- マイクロサービス間で使用
-curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
+### 本番環境URL
+**ベースURL**: `https://api.hey-watch.me/vibe-aggregator`
 
-# ローカル開発用
-curl -X GET "http://localhost:8009/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
-```
-
-#### タイムブロック単位処理
-```bash
-# マルチモーダルプロンプト生成（Whisper + YAMNet + 観測対象者情報）
-curl -X GET "http://localhost:8009/generate-timeblock-prompt?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-01&time_block=16-00"
-```
-
-#### ダッシュボード統合処理（新機能）
-```bash
-# 1日分のダッシュボード分析結果を統合
-curl -X GET "http://localhost:8009/generate-dashboard-summary?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-08"
-
-# 外部URL（本番環境）
-curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-dashboard-summary?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-08"
-```
+### 利用可能なエンドポイント
 
 #### ヘルスチェック
 ```bash
 curl -X GET "https://api.hey-watch.me/vibe-aggregator/health"
 ```
+
+#### 1日分統合処理
+48個のタイムブロックデータを統合してプロンプトを生成
+```bash
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-mood-prompt-supabase?device_id=d067d407-cf73-4174-a9c1-d91fb60d64d0&date=2025-07-15"
+```
+
+#### タイムブロック単位処理
+マルチモーダルプロンプト生成（Whisper + YAMNet + OpenSMILE + 観測対象者情報）
+```bash
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-timeblock-prompt?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-01&time_block=16-00"
+```
+
+#### ダッシュボード統合処理
+1日分のダッシュボード分析結果を統合して累積評価を生成
+```bash
+curl -X GET "https://api.hey-watch.me/vibe-aggregator/generate-dashboard-summary?device_id=9f7d6e27-98c3-4c19-bdfb-f7fda58b9a93&date=2025-09-08"
+```
+
+### ローカル開発時のURL
+開発環境では `http://localhost:8009` を使用してください。
 
 ### 成功レスポンス例
 
@@ -450,15 +452,10 @@ python3 check_result.py
 
 ## 📚 API ドキュメント
 
-### 本番環境（外部URL）
 - **Swagger UI**: `https://api.hey-watch.me/vibe-aggregator/docs`
 - **ReDoc**: `https://api.hey-watch.me/vibe-aggregator/redoc`
-- **ヘルスチェック**: `https://api.hey-watch.me/vibe-aggregator/health`
 
-### ローカル開発環境
-- **Swagger UI**: `http://localhost:8009/docs`
-- **ReDoc**: `http://localhost:8009/redoc`
-- **ヘルスチェック**: `http://localhost:8009/health`
+ローカル開発環境では `http://localhost:8009/docs` または `http://localhost:8009/redoc` を使用してください。
 
 ## 🚢 手動デプロイ手順（CI/CDを使わない場合）
 
@@ -1029,66 +1026,10 @@ result = generate_mood_prompt("d067d407-cf73-4174-a9c1-d91fb60d64d0", "2025-07-1
 print(result)
 ```
 
-### 利用可能なエンドポイント
-
-| エンドポイント | メソッド | 説明 | パラメータ |
-|---------------|---------|------|-----------|
-| `/health` | GET | ヘルスチェック | なし |
-| `/generate-mood-prompt-supabase` | GET | プロンプト生成 | `device_id`, `date` |
-| `/docs` | GET | Swagger UI | なし |
-| `/redoc` | GET | ReDoc | なし |
 
 ### セキュリティ設定
 
 - ✅ HTTPS対応（SSL証明書あり）
 - ✅ CORS設定済み
 - ✅ 適切なヘッダー設定
-- ✅ レート制限対応（Nginxレベル） ## 🚢 本番環境デプロイ
-
-### 前提条件
-1. **watchme-networkインフラストラクチャが起動済み**
-2. **環境変数ファイル（.env）が配置済み**
-3. **AWS CLIが設定済み**
-
-### ECRへのデプロイ（ローカルから）
-
-```bash
-# 1. deploy-ecr.shスクリプトを使用
-cd /Users/kaya.matsumoto/api_gen-prompt_mood-chart_v1
-./deploy-ecr.sh
-```
-
-### EC2サーバーでのデプロイ
-
-#### 方法1: run-prod.shを使用（推奨）
-```bash
-# EC2サーバー上で実行
-cd /home/ubuntu/watchme-api-vibe-aggregator
-./run-prod.sh
-```
-
-#### 方法2: 手動でdocker-composeを使用
-```bash
-# ECRから最新イメージをプル
-aws ecr get-login-password --region ap-southeast-2 | \
-  docker login --username AWS --password-stdin \
-  754724220380.dkr.ecr.ap-southeast-2.amazonaws.com
-
-docker pull 754724220380.dkr.ecr.ap-southeast-2.amazonaws.com/watchme-api-vibe-aggregator:latest
-
-# コンテナを起動
-docker-compose -f docker-compose.prod.yml down
-docker-compose -f docker-compose.prod.yml up -d
-```
-
-### 動作確認
-```bash
-# ヘルスチェック
-curl http://localhost:8009/health
-
-# コンテナ状態確認
-docker ps | grep api_gen_prompt_mood_chart
-
-# ログ確認
-docker logs -f api_gen_prompt_mood_chart
-```
+- ✅ レート制限対応（Nginxレベル）

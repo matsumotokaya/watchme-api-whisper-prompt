@@ -10,8 +10,9 @@ Supabase対応版: vibe_whisperテーブルから読み込み、vibe_whisper_pro
 import os
 import json
 import uvicorn
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
+import jpholiday
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -270,6 +271,61 @@ from timeblock_endpoint import (
     get_season,
     generate_age_context
 )
+
+def get_holiday_context(date: str) -> Dict[str, Any]:
+    """
+    指定日の祝日・連休情報を取得
+    
+    Args:
+        date: 日付 (YYYY-MM-DD形式)
+    
+    Returns:
+        祝日情報と連休コンテキストを含む辞書
+    """
+    try:
+        date_obj = datetime.strptime(date, "%Y-%m-%d")
+        
+        # 祝日判定
+        holiday_name = jpholiday.is_holiday_name(date_obj)
+        is_holiday = holiday_name is not None
+        
+        # 前後の日付を確認して連休判定
+        day_before = date_obj - timedelta(days=1)
+        day_after = date_obj + timedelta(days=1)
+        
+        holiday_before = jpholiday.is_holiday_name(day_before)
+        holiday_after = jpholiday.is_holiday_name(day_after)
+        is_weekend_before = day_before.weekday() >= 5
+        is_weekend_after = day_after.weekday() >= 5
+        is_weekend_current = date_obj.weekday() >= 5
+        
+        # 連休のコンテキスト生成
+        consecutive_context = ""
+        if (holiday_before or is_weekend_before) and (holiday_after or is_weekend_after):
+            consecutive_context = "3連休の中日"
+        elif holiday_after or is_weekend_after:
+            consecutive_context = "連休初日"
+        elif holiday_before or is_weekend_before:
+            consecutive_context = "連休最終日"
+        elif is_holiday:
+            consecutive_context = "祝日"
+        elif is_weekend_current:
+            consecutive_context = "週末"
+        
+        return {
+            "is_holiday": is_holiday,
+            "holiday_name": holiday_name,
+            "consecutive_context": consecutive_context,
+            "is_weekend": is_weekend_current
+        }
+    except Exception as e:
+        print(f"祝日情報の取得に失敗: {e}")
+        return {
+            "is_holiday": False,
+            "holiday_name": None,
+            "consecutive_context": "",
+            "is_weekend": False
+        }
 
 @app.get("/generate-timeblock-prompt")
 async def generate_timeblock_prompt(
@@ -539,12 +595,35 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
     hour = int(last_time_block.split('-')[0])
     minute = int(last_time_block.split('-')[1])
     
-    # 曜日情報と季節を取得（timeblock_endpointから流用）
+    # 曜日情報と季節を取得
     weekday_info = get_weekday_info(date)
     season = get_season(int(date.split('-')[1]))
     
-    # 観測対象者のコンテキスト
-    subject_context = generate_age_context(subject_info) if subject_info else "観測対象者情報：不明"
+    # 祝日・連休情報を取得
+    holiday_info = get_holiday_context(date)
+    
+    # 日付コンテキストの生成
+    if holiday_info['is_holiday']:
+        day_context = f"{holiday_info['holiday_name']}"
+        if holiday_info['consecutive_context']:
+            day_context += f"（{holiday_info['consecutive_context']}）"
+    elif holiday_info['is_weekend']:
+        day_context = weekday_info['day_type']
+        if holiday_info['consecutive_context']:
+            day_context += f"（{holiday_info['consecutive_context']}）"
+    else:
+        day_context = weekday_info['day_type']
+    
+    # 観測対象者の詳細情報を構成
+    if subject_info:
+        age = subject_info.get('age', '不明')
+        gender = subject_info.get('gender', '不明')
+        notes = subject_info.get('notes', '')
+        subject_description = f"{age}歳の{gender}"
+        if notes:
+            subject_description += f"（{notes}）"
+    else:
+        subject_description = "観測対象者情報なし"
     
     # 時間帯の判定
     time_context = ""
@@ -587,53 +666,41 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
         end_minute = 0
     end_time = f"{end_hour:02d}:{end_minute:02d}"
     
-    # ==================== 改善版プロンプト：コンテキスト重視、価値ある情報に集中 ====================
-    prompt = f"""## 1日の活動分析タスク
+    # ==================== 改善版プロンプト：観測対象者情報を前面に、常識的推論を促す ====================
+    prompt = f"""## 分析の前提
+観測対象者: {subject_description}
+日付: {date}（{weekday_info['weekday']}、{day_context}）
+季節: {season}、地域: 日本
 
-{date}（{weekday_info['weekday']}、{weekday_info['day_type']}）の観測データから、
-実際の発話内容と感情スコアに基づいて、注目すべき出来事と心理状態を分析してください。
+上記の人物の{hour:02d}:{minute:02d}までの記録です。
+録音される音声には本人だけでなく、周囲の人物（家族、友人、テレビ等）の声も含まれます。
+観測対象者の年齢や状況から、常識的に考えて、誰の発話か、どこにいるか、何をしているかを推測してください。
 
-### 観測コンテキスト
-- 観測対象者: {subject_context}
-- 日付: {date}（{weekday_info['weekday']}）
-- 季節: {season}
-- 地域: 日本
-- 現在時刻: {hour:02d}:{minute:02d}までのデータ
-- データ数: {statistics.get('total_blocks', 0)}ブロック（各30分）
+例：5歳児の記録に「光の屈折について」の説明があれば、それは保護者の説明でしょう。
+例：高齢者の記録に子供の声があれば、孫との交流かもしれません。
 
-### 実際の観測データ
+### 実際の観測データ（{statistics.get('total_blocks', 0)}ブロック記録）
 {timeline_text}
 
-### 出力形式（必須）
+### 出力形式
+以下のJSON形式で出力してください。
+cumulative_evaluationには、観測対象者の情報と文脈を踏まえた自然な状況理解を記載してください。
+
 ```json
 {{
   "current_time": "{hour:02d}:{minute:02d}",
   "time_context": "{time_context}",
-  "cumulative_evaluation": "実際の発話から読み取れる具体的な感情・出来事・心理変化を2-3文で記載",
+  "cumulative_evaluation": "観測対象者の特性と実際のデータから理解できる状況を2-3文で記載。誰の発話か、どこで何をしているかを含めて。",
   "mood_trajectory": "positive_trend/negative_trend/stable/fluctuating",
-  "current_state_score": 0
+  "current_state_score": -100から+100の整数
 }}
 ```
 
-### 分析の重要指針
-
-**価値ある情報に集中する:**
-- ✅ 発話内容から読み取れる具体的な感情（楽しい、ストレス、不安、興奮）
-- ✅ 実際の出来事（友人との会話、仕事の話題、家族との時間）
-- ✅ 心理状態の変化（朝は元気→午後に疲れ、イライラ→落ち着いた等）
-- ✅ 特徴的な行動パターン（頻繁な笑い、ため息、独り言等）
-
-**記載不要な情報:**
-- ❌ 「深夜から朝にかけて睡眠」のような自明な事実
-- ❌ 「静かだった」「無言だった」などデータ欠如の説明
-- ❌ 時間帯から当然推測される一般的な行動
-
-**コンテキストの活用:**
-- 観測対象者の年齢・特性を考慮（子供なら遊びの文脈、大人なら仕事の文脈等）
-- 曜日の特性（平日なら仕事/学校、週末なら休息/レジャー）
-- 季節の影響（夏なら暑さへの言及、冬なら寒さへの反応等）
-
-**JSONのみを返す**（説明や補足は一切不要）"""
+### 分析の視点
+- 発話内容から読み取れる具体的な感情や出来事にフォーカス
+- 観測対象者の年齢・特性から自然に推測できることは推測
+- 「睡眠」「静か」などの自明な記述は避ける
+- データがある部分から価値ある情報を抽出"""
     
     return prompt
 
