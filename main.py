@@ -265,12 +265,12 @@ async def generate_mood_prompt_supabase(
 # 新規: タイムブロック単位の処理エンドポイント
 # ===============================
 from timeblock_endpoint import (
-    process_timeblock_v2,
     process_and_save_to_dashboard,
     get_weekday_info,
     get_season,
     generate_age_context
 )
+from timeblock_endpoint_v2 import process_timeblock_v3
 
 def get_holiday_context(date: str) -> Dict[str, Any]:
     """
@@ -340,8 +340,8 @@ async def generate_timeblock_prompt(
         # Supabaseクライアント取得
         supabase = get_supabase_client()
         
-        # 処理実行
-        result = await process_timeblock_v2(supabase, device_id, date, time_block)
+        # 処理実行（改善版V3を使用）
+        result = await process_timeblock_v3(supabase, device_id, date, time_block)
         
         return result
         
