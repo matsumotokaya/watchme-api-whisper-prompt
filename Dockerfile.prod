@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY main.py .
 COPY supabase_client.py .
 COPY timeblock_endpoint.py .
+COPY timeblock_endpoint_v2.py .
 
 # データディレクトリのマウントポイントを作成
 RUN mkdir -p /app/data
