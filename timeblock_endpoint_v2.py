@@ -76,7 +76,7 @@ def generate_timeblock_prompt_v2(transcription: Optional[str], sed_data: Optiona
                                  date: str = None, subject_info: Optional[Dict] = None,
                                  opensmile_data: Optional[list] = None) -> str:
     """
-    改善版プロンプト生成：AIの常識的判断を活用
+    改善版プロンプト生成：LLMの常識的判断を最大限活用
     """
     
     # 時間情報の解析
@@ -91,102 +91,113 @@ def generate_timeblock_prompt_v2(transcription: Optional[str], sed_data: Optiona
     weekday_info = get_weekday_info(date) if date else {"weekday": "不明", "day_type": "不明"}
     holiday_info = get_holiday_context(date) if date else {"is_holiday": False, "holiday_name": None}
     
-    # 日付コンテキスト
-    if holiday_info['is_holiday']:
-        day_context = f"祝日（{holiday_info['holiday_name']}）"
-    elif holiday_info['is_weekend']:
-        day_context = "週末"
-    else:
-        day_context = "平日"
-    
-    # 環境音の要約
-    sound_events = ""
-    if sed_data and len(sed_data) > 0:
-        # 主要な音響イベントを抽出
-        events = []
-        for event in sed_data[:10]:  # 上位10個まで
-            label = event.get('label', '')
-            prob = event.get('prob', 0)
-            if prob > 0.3:  # 確率が30%以上のもの
-                events.append(label)
-        
-        if events:
-            sound_events = f"検出された音: {', '.join(events[:5])}"  # 最大5個まで表示
-        else:
-            sound_events = "特徴的な環境音なし"
-    else:
-        sound_events = "環境音データなし"
-    
-    # 音声特徴の要約
-    acoustic_context = ""
+    # OpenSMILEデータの分析と時系列表示
+    speech_analysis = ""
     if opensmile_data and len(opensmile_data) > 0:
-        loudness_values = [item.get('features', {}).get('Loudness_sma3', 0) for item in opensmile_data]
-        if loudness_values:
-            avg_loudness = sum(loudness_values) / len(loudness_values)
-            if avg_loudness > -20:
-                acoustic_context = "音量: 大きめ（活発な活動の可能性）"
-            elif avg_loudness < -40:
-                acoustic_context = "音量: 小さめ（静かな環境）"
-            else:
-                acoustic_context = "音量: 普通レベル"
+        # Jitterから発話の有無を判定
+        jitter_values = []
+        loudness_values = []
+        for item in opensmile_data:
+            features = item.get('features', {})
+            jitter_values.append(features.get('jitterLocal_sma3nz', 0))
+            loudness_values.append(features.get('Loudness_sma3', 0))
+        
+        speaking_seconds = sum(1 for j in jitter_values if j > 0)
+        total_seconds = len(jitter_values)
+        speech_ratio = speaking_seconds / total_seconds if total_seconds > 0 else 0
+        
+        # 時系列の最初の20秒を表示
+        timeline = ["時刻|音量|Jitter|状態"]
+        timeline.append("---|---|---|---")
+        for i in range(min(20, len(opensmile_data))):
+            features = opensmile_data[i].get('features', {})
+            loudness = features.get('Loudness_sma3', 0)
+            jitter = features.get('jitterLocal_sma3nz', 0)
+            state = "発話" if jitter > 0 else "無音"
+            timeline.append(f"{i:02d}秒|{loudness:.3f}|{jitter:.6f}|{state}")
+        
+        speech_analysis = f"""
+### 音響分析（60秒間の客観的データ）
+- **発話検出**: {speaking_seconds}秒/{total_seconds}秒（{speech_ratio:.0%}が発話）
+- **重要**: Jitter=0は発話なし、Jitter>0は人の声あり
+
+#### 音響データ時系列（最初の20秒）
+{chr(10).join(timeline)}
+"""
+    
+    # 環境音の簡潔な要約
+    sound_summary = "環境音データなし"
+    if sed_data and len(sed_data) > 0:
+        top_sounds = []
+        for e in sed_data[:5]:
+            if e.get('prob', 0) > 0.3:
+                top_sounds.append(e.get('label', ''))
+        if top_sounds:
+            sound_summary = f"検出音: {', '.join(top_sounds)}"
     
     # プロンプト生成
-    prompt = f"""## 音声サンプル分析（30分中の1分間録音）
+    prompt = f"""
+あなたは子どもの行動観察の専門家です。
+与えられたデータから、その時点で最も可能性の高い状況を、あなたの専門知識と常識を使って推測してください。
 
-これは30分ブロックのうち約1分間をサンプリング録音したデータです。
-観測対象者の年齢と時間帯を考慮し、録音データから状況を分析してください。
+## 観測対象者
+{age}歳 {gender}
 
-### 観測情報
-観測対象者: {age}歳 {gender}
-時刻: {date} {hour:02d}:{minute:02d}〜{hour:02d}:{minute+30 if minute+30 < 60 else minute-30:02d}の30分ブロック
-曜日: {weekday_info['weekday']}（{day_context}）
-季節: {get_season(int(date.split('-')[1])) if date else '不明'}
+## 時間情報  
+- 日時: {date} {hour:02d}:{minute:02d}
+- 曜日: {weekday_info['weekday']}（{weekday_info['day_type']}）
+{'- 🎌 祝日: ' + holiday_info['holiday_name'] if holiday_info['is_holiday'] else ''}
 
-{'【注意】本日は祝日のため、教育機関は休業です。' if holiday_info['is_holiday'] else ''}
+{speech_analysis}
 
-### 録音データ
+### 発話内容
+{f'「{transcription}」' if transcription and transcription.strip() else '録音された明確な発話なし'}
 
-#### 発話内容
-{f'「{transcription}」' if transcription and transcription.strip() else 'この1分間の録音では発話は記録されませんでした'}
+### 環境音
+{sound_summary}
 
-#### 環境音
-{sound_events}
+## 分析依頼
 
-{f'#### 音声特徴' + chr(10) + acoustic_context if acoustic_context else ''}
+上記のデータから、**この{age}歳の人が{hour:02d}:{minute:02d}に何をしていた可能性が最も高いか**、
+あなたの専門知識と常識を使って判断してください。
 
-### 分析依頼
+特に重要な判断材料：
+- 年齢と時間帯の組み合わせ（例：幼児の深夜なら通常は睡眠）
+- Jitterデータが示す発話の有無（0=発話なし、>0=発話あり）
+- 休日/平日の違い
 
-以下の4つのフィールドを持つJSONで回答してください（全フィールド必須）:
+以下のJSON形式で回答してください：
 
 ```json
 {{
   "time_block": "{time_block}",
-  "summary": "【1文目】録音時点での観測対象者の具体的な行動や状況。【2文目】そこから推測される心理状態や感情。",
-  "behavior": "推測される主な行動を最大3つ、カンマ区切りで記載（例: 食事,会話,テレビ視聴）",
-  "vibe_score": -100〜+100の整数値
+  "summary": "最も可能性の高い状況を2文で説明。常識的に考えて最も自然な解釈を。",
+  "behavior": "主な行動（以下から選択、カンマ区切りで最大3つ）",
+  "vibe_score": -100〜+100（状況に応じて）
 }}
 ```
 
-**重要な注意事項:**
-- これは30分間のうち1分間のサンプルです。「30分間ずっと〜」という表現は避けてください
-- summaryには観測対象者の名前、年齢、性別、時刻は記載しないでください（既知情報のため）
-- 発話がなくても「沈黙」と決めつけず、「この録音では発話なし」と事実を述べてください
+**behaviorの選択肢**：
+【基本的な生活行動】
+睡眠, 食事, 入浴, トイレ, 着替え, 歯磨き
 
-**vibe_scoreの基本方針:**
-- 発話がない場合は基本的に0点付近（-10〜+10）としてください
-- ただし、音楽鑑賞、テレビ視聴、歌唱など、環境音から活動が推測される場合は状況に応じて加減点してください
-- スコア分布の目安：
-  * 非常にポジティブ（活発・楽しい）: 60〜100
-  * ポジティブ（穏やか・安定）: 20〜60
-  * ニュートラル（特に感情なし）: -20〜20
-  * ネガティブ（疲れ・不満）: -60〜-20
-  * 非常にネガティブ（泣き・怒り）: -100〜-60
+【活動】  
+遊び, 学習, 宿題, 読書, 運動, 散歩, 移動, 外出
 
-**behaviorの記述例:**
-- 朝の場合: "朝食,準備,会話"
-- 昼の場合: "遊び,発話,移動"
-- 夜の場合: "入浴,休息,テレビ視聴"
-- 発話なしの場合も時間帯から推測: "休息,静観,思考"
+【社会的行動】
+会話, 電話, 家族団らん, 友達と遊ぶ
+
+【メディア・娯楽】
+テレビ, YouTube, ゲーム, 音楽, タブレット
+
+【その他】
+準備, 片付け, 家事手伝い, 休憩, 待機
+
+**判断のポイント：**
+- ルールに縛られず、最も自然で常識的な解釈をしてください
+- 例：5歳児の午前2時＋Jitter全て0 → 「睡眠」が最も自然
+- 例：休日の午前中＋断続的な発話 → 「家族と過ごしている」が自然
+- 健康的な睡眠は+20〜+40点、深夜の覚醒は-20〜-40点など、状況に応じて採点
 """
     
     return prompt
