@@ -576,9 +576,46 @@ async def generate_dashboard_summary(
         raise HTTPException(status_code=500, detail=f"サーバーエラー: {str(e)}")
 
 
+def detect_burst_events(timeline: List[Dict], threshold: int = 30) -> List[Dict]:
+    """
+    タイムラインから感情の大きな変化点（バーストイベント）を検出
+    
+    Args:
+        timeline: タイムブロックごとのデータリスト
+        threshold: 変化を検出する閾値（デフォルト30ポイント）
+    
+    Returns:
+        List[Dict]: 検出された変化点のリスト
+    """
+    burst_events = []
+    
+    for i in range(1, len(timeline)):
+        prev_score = timeline[i-1].get('vibe_score')
+        curr_score = timeline[i].get('vibe_score')
+        
+        if prev_score is not None and curr_score is not None:
+            change = curr_score - prev_score
+            
+            # 大きな変化を検出
+            if abs(change) >= threshold:
+                time_block = timeline[i]['time_block']
+                time_str = time_block.replace('-', ':')
+                
+                burst_events.append({
+                    'time': time_str,
+                    'from_score': prev_score,
+                    'to_score': curr_score,
+                    'change': change,
+                    'summary': timeline[i].get('summary', '')
+                })
+    
+    return burst_events
+
+
 def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict], statistics: Dict, last_time_block: str, subject_info: Optional[Dict] = None) -> str:
     """
     改善版：コンテキストを活用し、実データから得られる価値ある情報に集中
+    バーストイベント検出機能を追加
     
     Args:
         device_id: デバイスID
@@ -589,7 +626,7 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
         subject_info: 観測対象者情報（オプション）
         
     Returns:
-        str: ChatGPT用の累積評価プロンプト
+        str: ChatGPT用の累積評価プロンプト（バーストイベント検出を含む）
     """
     # 時間・曜日・季節のコンテキスト取得
     hour = int(last_time_block.split('-')[0])
@@ -658,6 +695,16 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
     
     timeline_text = "\n".join(timeline_texts) if timeline_texts else "有意なデータが記録されていません。"
     
+    # バーストイベントの検出
+    burst_events = detect_burst_events(timeline)
+    burst_events_text = ""
+    if burst_events:
+        burst_events_text = "\n### 検出された感情の変化点（参考情報）\n"
+        for event in burst_events[:5]:  # 最大5件まで表示
+            burst_events_text += f"- {event['time']}: スコアが{event['from_score']}から{event['to_score']}へ変化（変化量: {event['change']:+d}）\n"
+            if event['summary']:
+                burst_events_text += f"  状況: {event['summary'][:50]}\n"
+    
     # 終了時刻の算出
     end_minute = minute + 30
     end_hour = hour
@@ -683,6 +730,7 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
 
 ### 1日の活動記録（{statistics.get('total_blocks', 0)}ブロック記録）
 {timeline_text}
+{burst_events_text}
 
 ### 重要：1日全体を総合的に評価してください
 これは{hour:02d}:{minute:02d}時点での**1日全体のラップアップ**です。
@@ -698,7 +746,16 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
   "time_context": "{time_context}",
   "cumulative_evaluation": "【最初の2文：1日のラップアップ】朝から{hour:02d}:{minute:02d}までの観測対象者の1日を総括。主要な活動、感情の流れ、特徴的な出来事を時系列で要約。【最後の1文：インサイト】この日の観測データから読み取れる、観測対象者の心理状態、行動パターン、または環境との相互作用に関する洞察。",
   "mood_trajectory": "positive_trend/negative_trend/stable/fluctuating",
-  "current_state_score": -100から+100の整数（1日全体の総合スコア）
+  "current_state_score": -100から+100の整数（1日全体の総合スコア）,
+  "burst_events": [
+    {{
+      "time": "HH:MM",
+      "event": "感情変化の要因となった出来事や状況の説明（日本語で簡潔に）",
+      "score_change": 変化量（-100〜+100の整数）,
+      "from_score": 変化前のスコア（-100〜+100の整数）,
+      "to_score": 変化後のスコア（-100〜+100の整数）
+    }}
+  ]
 }}
 ```
 
@@ -715,7 +772,23 @@ def generate_daily_summary_prompt(device_id: str, date: str, timeline: List[Dict
 - 1日の時間経過に沿った活動と感情の変化を追跡
 - 朝・昼・午後・夕方の各時間帯の特徴を統合
 - 観測対象者の年齢・特性を考慮した自然な解釈
-- データから読み取れる行動パターンや心理的傾向の発見"""
+- データから読み取れる行動パターンや心理的傾向の発見
+
+### burst_events（バーストイベント）の記述ガイドライン
+感情が大きく変化した時点を特定し、以下の基準で記録してください：
+1. **検出基準**：
+   - 前後30分でスコアが30ポイント以上変化した時点
+   - ポジティブ⇔ネガティブの転換点
+   - 特定の出来事により感情が急変した瞬間
+
+2. **eventの記述**：
+   - その時間帯のsummaryから推測される具体的な出来事
+   - 観測対象者の年齢・特性に応じた自然な解釈
+   - 例: "朝の活動開始で気分が向上"、"昼食後の満足感"、"夕方の疲れによる気分低下"
+
+3. **最大3〜5件程度**：
+   - 1日で最も顕著な変化点のみを抽出
+   - 些細な変動は除外し、意味のある変化に焦点"""
     
     return prompt
 
