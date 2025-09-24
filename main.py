@@ -401,13 +401,14 @@ async def generate_dashboard_summary(
         # Supabaseクライアント取得
         supabase = get_supabase_client()
         
-        # dashboardテーブルから該当日のcompletedレコードを取得（時系列順）
+        # dashboardテーブルから該当日のvibe_scoreが存在するレコードを取得（時系列順）
+        # ステータスに関係なく、データがあれば処理対象とする
         dashboard_response = supabase.table("dashboard").select("*").eq(
             "device_id", device_id
         ).eq(
             "date", date
-        ).eq(
-            "status", "completed"
+        ).not_.is_(
+            "vibe_score", "null"  # vibe_scoreが存在するデータを全て対象とする
         ).order(
             "time_block", desc=False
         ).execute()
@@ -415,7 +416,7 @@ async def generate_dashboard_summary(
         if not dashboard_response.data:
             return {
                 "status": "warning",
-                "message": f"処理済みデータが見つかりません。device_id: {device_id}, date: {date}",
+                "message": f"vibe_scoreが存在するデータが見つかりません。device_id: {device_id}, date: {date}",
                 "processed_count": 0
             }
         
