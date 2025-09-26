@@ -555,6 +555,7 @@ async def generate_dashboard_summary(
             "message": f"ダッシュボードサマリーを生成しました。処理済みブロック数: {processed_count}",
             "device_id": device_id,
             "date": date,
+            "prompt": daily_summary_prompt,  # Lambda関数が期待するプロンプトを追加
             "processed_count": processed_count,
             "last_time_block": last_time_block,
             "vibe_scores_count": vibe_score_count,  # 新規追加: 有効なスコア数
